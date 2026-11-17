@@ -41,6 +41,54 @@ describe('rate limits behind the local reverse proxy', () => {
     } finally { await app.close() }
   })
 
+  it('sustains simultaneous account traffic at the 200/minute boundary', async () => {
+    const app = Fastify({ trustProxy: '127.0.0.1' })
+    await app.register(rateLimit, { max: 200, timeWindow: '1 minute', hook: 'preHandler', keyGenerator: accountRateKey })
+    app.get('/private', { preHandler: async (request: any) => {
+      request.user = { typ: 'access', tenantId: 't', userId: request.headers['x-test-user'] }
+    } }, async () => ({ ok: true }))
+    app.get('/health', { config: { rateLimit: false } }, async () => ({ status: 'ok' }))
+    try {
+      const requests = Array.from({ length: 200 }, (_, i) => ['a', 'b'].map((user) =>
+        app.inject({ url: '/private', headers: { 'x-test-user': user, 'x-forwarded-for': `198.51.100.${i % 2 + 1}` } })
+      )).flat()
+      const results = await Promise.all(requests)
+      expect(results.every((result) => result.statusCode === 200)).toBe(true)
+      expect((await app.inject({ url: '/private', headers: { 'x-test-user': 'a' } })).statusCode).toBe(429)
+      expect((await app.inject({ url: '/private', headers: { 'x-test-user': 'b' } })).statusCode).toBe(429)
+      expect((await app.inject('/health')).statusCode).toBe(200)
+    } finally { await app.close() }
+  })
+
+  it('does not share one quota across five roles behind the same proxy', async () => {
+    const app = Fastify({ trustProxy: '127.0.0.1' })
+    await app.register(rateLimit, { max: 200, timeWindow: '1 minute', hook: 'preHandler', keyGenerator: accountRateKey })
+    app.get('/private', { preHandler: async (request: any) => {
+      request.user = { typ: 'access', tenantId: 't', userId: request.headers['x-test-user'] }
+    } }, async () => ({ ok: true }))
+    try {
+      const roles = ['supply-chain', 'manager', 'kitchen-lead', 'boss', 'supplier']
+      const requests = roles.flatMap(user => Array.from({ length: 50 }, () => app.inject({
+        url: '/private', remoteAddress: '127.0.0.1', headers: { 'x-test-user': user, 'x-forwarded-for': '198.51.100.10' },
+      })))
+      const responses = await Promise.all(requests)
+      expect(responses).toHaveLength(250)
+      expect(responses.every(response => response.statusCode === 200)).toBe(true)
+    } finally { await app.close() }
+  })
+
+  it('keeps health checks available when a client exhausts its request quota', async () => {
+    const app = Fastify({ trustProxy: '127.0.0.1' })
+    await app.register(rateLimit, { max: 1, timeWindow: '1 minute', hook: 'preHandler', keyGenerator: accountRateKey })
+    app.get('/normal', async () => ({ ok: true }))
+    app.get('/health', { config: { rateLimit: false } }, async () => ({ status: 'ok' }))
+    try {
+      expect((await app.inject('/normal')).statusCode).toBe(200)
+      expect((await app.inject('/normal')).statusCode).toBe(429)
+      expect((await app.inject('/health')).statusCode).toBe(200)
+    } finally { await app.close() }
+  })
+
   it('uses the real client address for public requests, ignoring a spoofed leftmost hop', async () => {
     const app = Fastify({ trustProxy: '127.0.0.1' })
     await app.register(rateLimit, { max: 1, timeWindow: '1 minute', hook: 'preHandler', keyGenerator: accountRateKey })

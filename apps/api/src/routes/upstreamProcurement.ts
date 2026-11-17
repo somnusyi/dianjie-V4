@@ -39,7 +39,7 @@ import {
   submitUpstreamPurchaseReturn,
 } from '../services/upstreamPurchaseReturns'
 import { postUpstreamClaimLossInTransaction, postUpstreamReceiptInTransaction, reverseUpstreamReceiptInTransaction } from '../services/warehouseLedger'
-import { assertWarehouseDocumentObjects, signOssKey } from './upload'
+import { assertSupplierArchiveObject, assertWarehouseDocumentObjects, signOssKey } from './upload'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 // Keep the API aligned with the guarded supply-chain workspace: tenant ADMIN
@@ -68,6 +68,7 @@ const purchaseOrderListQuerySchema = z.object({
   dateField: z.enum(['createdAt', 'expectedArrivalAt']).default('createdAt'),
   dateFrom: purchaseOrderDateKey.optional(),
   dateTo: purchaseOrderDateKey.optional(),
+  orderQuery: z.string().trim().min(1).max(160).optional(),
   productQuery: z.string().trim().min(1).max(160).optional(),
 }).superRefine((query, ctx) => {
   if (query.dateFrom && query.dateTo && query.dateFrom > query.dateTo) {
@@ -161,7 +162,7 @@ const contractCreateSchema = z
           endsAt: isoDateInput.optional(),
         })
       )
-      .min(1)
+      .min(0)
       .max(500),
   })
   .strict()
@@ -207,6 +208,7 @@ const purchaseOrderCreateSchema = z
       .min(1)
       .max(500),
   })
+
   .strict()
   .superRefine((data, ctx) => {
     const ids = data.lines.map((line) => line.contractLineId)
@@ -218,6 +220,24 @@ const purchaseOrderCreateSchema = z
       })
     }
   })
+
+// New purchase orders are priced on the order; old contract orders retain snapshots.
+const directPurchaseOrderCreateSchema = z.object({
+  supplierId: idSchema,
+  warehouseId: idSchema,
+  sendToSupplier: z.boolean().default(false),
+  expectedArrivalAt: isoDateInput.optional(),
+  note: z.string().trim().max(500).optional(),
+  idempotencyKey: z.string().trim().min(8).max(160),
+  lines: z.array(z.object({
+    upstreamSourceId: idSchema,
+    quantity: decimalInput.refine(value => decimal(value).decimalPlaces() <= 6, '采购数量最多六位小数'),
+    unitPrice: decimalInput.refine(value => decimal(value).decimalPlaces() <= 6, '本单单价最多六位小数'),
+  })).min(1).max(500),
+}).strict().superRefine((data, ctx) => {
+  const ids = data.lines.map(line => line.upstreamSourceId)
+  if (new Set(ids).size !== ids.length) ctx.addIssue({ code: 'custom', path: ['lines'], message: '采购商品不能重复' })
+})
 
 const revisionCreateSchema = z
   .object({
@@ -1155,7 +1175,25 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
           })
         : Promise.resolve([]),
     ])
-    return { suppliers, warehouses, sources }
+    const pastLines = supplierId && sources.length ? await prisma.upstreamPurchaseOrderLine.findMany({
+      where: {
+        tenantId,
+        productId: { in: sources.map(source => source.product.id) },
+        purchaseOrder: { tenantId, supplierId, status: { notIn: ['DRAFT', 'CANCELLED'] } },
+      },
+      select: { productId: true, purchaseUnit: true, unitPrice: true },
+      orderBy: [{ purchaseOrder: { createdAt: 'desc' } }, { createdAt: 'desc' }],
+      distinct: ['productId', 'purchaseUnit'],
+    }) : []
+    const lastPrice = new Map<string, Prisma.Decimal>()
+    for (const line of pastLines) {
+      const key = `${line.productId}:${line.purchaseUnit}`
+      if (!lastPrice.has(key)) lastPrice.set(key, line.unitPrice)
+    }
+    return { suppliers, warehouses, sources: sources.map(source => ({
+      ...source,
+      lastOrderUnitPrice: lastPrice.get(`${source.product.id}:${source.purchaseUnit}`) || null,
+    })) }
   })
 
   app.get('/quality-standards', auth(app), async (req: any, reply: any) => {
@@ -1557,7 +1595,7 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
   app.get('/contracts', auth(app), async (req: any, reply: any) => {
     const { tenantId, role } = req.user
     const supplierId = INTERNAL_ROLES.has(role) ? (typeof req.query?.supplierId === 'string' ? req.query.supplierId : undefined) : supplierScope(req, 'upstream.order.read')
-    return prisma.upstreamSupplierContract.findMany({
+    const contracts = await prisma.upstreamSupplierContract.findMany({
       where: { tenantId, ...(supplierId ? { supplierId } : {}) },
       include: {
         supplier: { select: { id: true, no: true, name: true } },
@@ -1566,6 +1604,13 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
       orderBy: [{ createdAt: 'desc' }, { version: 'desc' }],
       take: 200,
     })
+    return contracts.map(contract => ({ ...contract, attachments: Array.isArray(contract.attachments)
+      ? contract.attachments.map(item => {
+          const attachment = item && typeof item === 'object' && !Array.isArray(item) ? item as Record<string, unknown> : {}
+          const key = typeof attachment.key === 'string' ? attachment.key : ''
+          return { ...attachment, url: key.startsWith(`supplier-archive-general/${tenantId}/`) ? signOssKey(key) : null }
+        })
+      : [] }))
   })
 
   app.post('/contracts', auth(app), async (req: any, reply: any) => {
@@ -1600,6 +1645,19 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
       select: { id: true },
     })
     if (!supplier) return reply.status(400).send({ error: '请选择已启用的上游供应商' })
+
+    if (!d.copyFromContractId && d.attachments?.length) {
+      for (const item of d.attachments) {
+        if (typeof item.key !== 'string' || typeof item.name !== 'string' || typeof item.mime !== 'string' || typeof item.size !== 'number') {
+          return reply.status(400).send({ error: '合同附件信息不完整' })
+        }
+        try {
+          await assertSupplierArchiveObject({ tenantId, sensitive: false, attachment: { key: item.key, name: item.name, mime: item.mime, size: item.size } })
+        } catch (error: any) {
+          return reply.status(error?.statusCode || 500).send({ error: error?.message || '合同附件校验失败' })
+        }
+      }
+    }
 
     const sourceIds = d.lines.map((line) => line.upstreamSourceId)
     const sources = await prisma.productUpstreamSource.findMany({
@@ -1792,7 +1850,6 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
         })
         if (!contract) return { status: 404, error: '合同不存在' } as const
         if (contract.status !== 'DRAFT') return { status: 409, error: '只有草稿合同可以生效' } as const
-        if (contract.lines.length === 0) return { status: 400, error: '合同至少需要一个有效商品' } as const
         await tx.upstreamSupplierContract.updateMany({
           where: {
             tenantId,
@@ -1838,6 +1895,7 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
       tenantId,
       ...(supplierId ? { supplierId } : {}),
       ...(query.status ? { status: query.status } : {}),
+      ...(query.orderQuery ? { no: { contains: query.orderQuery, mode: 'insensitive' } } : {}),
       ...(boundSupplierId ? {AND:[supplierVisiblePurchaseOrder]} : {}),
     }
     if (query.dateFrom || query.dateTo) {
@@ -1860,6 +1918,7 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
     const include = {
       supplier: { select: { id: true, no: true, name: true } },
       warehouse: { select: { id: true, code: true, name: true } },
+      lines: { select: { id: true, productNameSnapshot: true }, orderBy: { lineNo: 'asc' as const }, take: 3 },
       _count: { select: { lines: true, shipments: true, receipts: true } },
     }
     const orderBy: Prisma.UpstreamPurchaseOrderOrderByWithRelationInput[] = [{ createdAt: 'desc' }, { id: 'desc' }]
@@ -1897,6 +1956,76 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
     const order = await scopedPurchaseOrder(req, idParsed.data)
     if (!order) return reply.status(404).send({ error: '采购单不存在' })
     return order
+  })
+
+  app.post('/purchase-orders/direct', auth(app), async (req: any, reply: any) => {
+    const { tenantId, role, userId } = req.user
+    if (!ensureInternal(role, reply)) return
+    const parsed = directPurchaseOrderCreateSchema.safeParse(req.body)
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    const d = parsed.data
+    const [supplier, warehouse] = await Promise.all([
+      prisma.supplier.findFirst({ where: { id: d.supplierId, tenantId, status: 'ENABLED', businessScopes: { has: 'WAREHOUSE_UPSTREAM' } }, select: { id: true } }),
+      prisma.warehouse.findFirst({ where: { id: d.warehouseId, tenantId, isActive: true }, select: { id: true } }),
+    ])
+    if (!supplier) return reply.status(400).send({ error: '上游供应商不存在或已停用' })
+    if (!warehouse) return reply.status(400).send({ error: '总仓不存在或已停用' })
+    try {
+      const order = await prisma.$transaction(async tx => {
+        const sourceIds = d.lines.map(line => line.upstreamSourceId)
+        const sources = await tx.productUpstreamSource.findMany({
+          where: { id: { in: sourceIds }, tenantId, supplierId: d.supplierId, isActive: true },
+          include: { product: true },
+        })
+        if (sources.length !== sourceIds.length || sources.some(source => source.product.status !== 'ENABLED')) {
+          throw Object.assign(new Error('采购商品不存在、已停用或不属于该供应商'), { statusCode: 400 })
+        }
+        const byId = new Map(sources.map(source => [source.id, source]))
+        let totalAmount = decimal(0)
+        const lines = d.lines.map((input, index) => {
+          const source = byId.get(input.upstreamSourceId)!
+          const quantity = decimal(input.quantity)
+          if (quantity.lessThan(source.minOrderQty)) throw Object.assign(new Error(`${source.product.name} 低于起订量`), { statusCode: 400 })
+          const unitPrice = decimal(input.unitPrice)
+          const lineAmount = money(quantity.times(unitPrice))
+          totalAmount = totalAmount.plus(lineAmount)
+          return {
+            tenantId, lineNo: index + 1, productId: source.productId,
+            productCodeSnapshot: source.product.code, productNameSnapshot: source.product.name,
+            productSpecSnapshot: source.product.spec, supplierSkuSnapshot: source.supplierSku,
+            purchaseUnit: source.purchaseUnit, inventoryUnit: source.product.inventoryUnit || source.product.unit,
+            inventoryUnitsPerPurchaseUnit: source.inventoryUnitsPerPurchaseUnit,
+            orderedQty: quantity, unitPrice, taxRate: decimal(0),
+            amountWithoutTax: lineAmount, taxAmount: decimal(0), totalAmount: lineAmount,
+          }
+        })
+        const no = await nextUpstreamDocumentNo(tx, tenantId, 'purchaseOrder')
+        const created = await tx.upstreamPurchaseOrder.create({
+          data: {
+            tenantId, no, supplierId: d.supplierId, warehouseId: d.warehouseId,
+            expectedArrivalAt: d.expectedArrivalAt || null, origin: 'MANUAL',
+            currency: 'CNY', taxInclusive: true, amountWithoutTax: money(totalAmount),
+            taxAmount: decimal(0), totalAmount: money(totalAmount),
+            idempotencyKey: d.idempotencyKey, note: d.note || null, createdById: userId,
+            ...(d.sendToSupplier ? { status: 'SUBMITTED_TO_SUPPLIER', submittedAt: new Date() } : {}),
+            lines: { create: lines },
+          },
+          include: { lines: { orderBy: { lineNo: 'asc' } } },
+        })
+        await tx.upstreamPurchaseOrderEvent.create({ data: {
+          tenantId, purchaseOrderId: created.id, action: 'CREATE', toStatus: d.sendToSupplier ? 'SUBMITTED_TO_SUPPLIER' : 'DRAFT', actorId: userId, actorRole: role,
+        } })
+        await tx.opLog.create({ data: { tenantId, userId, role, action: '创建上游采购单', entityType: 'UpstreamPurchaseOrder', target: no, targetId: created.id } })
+        return created
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })
+      return reply.status(201).send(order)
+    } catch (error: any) {
+      if (error?.code === 'P2002') {
+        const existing = await prisma.upstreamPurchaseOrder.findFirst({ where: { tenantId, idempotencyKey: d.idempotencyKey }, include: { lines: true } })
+        if (existing) return reply.status(200).send(existing)
+      }
+      return reply.status(error?.statusCode || 500).send({ error: error?.statusCode ? error.message : '采购单创建失败' })
+    }
   })
 
   app.post('/purchase-orders', auth(app), async (req: any, reply: any) => {
@@ -2104,7 +2233,7 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
           data: {
             status: to,
             rowVersion: { increment: 1 },
-            ...(to === 'SUBMITTED_TO_SUPPLIER' ? { approvedById: userId, submittedAt: now } : {}),
+            ...(to === 'SUBMITTED_TO_SUPPLIER' ? { submittedAt: now, ...(from === 'PENDING_APPROVAL' ? { approvedById: userId } : {}) } : {}),
           },
         })
         if (changed.count !== 1) return null
@@ -2131,6 +2260,8 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
   }
 
   app.post('/purchase-orders/:id/submit-for-approval', auth(app), (req: any, reply: any) => internalOrderTransition(req, reply, 'DRAFT', 'PENDING_APPROVAL'))
+
+  app.post('/purchase-orders/:id/send-to-supplier', auth(app), (req: any, reply: any) => internalOrderTransition(req, reply, 'DRAFT', 'SUBMITTED_TO_SUPPLIER'))
 
   app.post('/purchase-orders/:id/approve-and-send', auth(app), (req: any, reply: any) => internalOrderTransition(req, reply, 'PENDING_APPROVAL', 'SUBMITTED_TO_SUPPLIER'))
 
@@ -2204,12 +2335,21 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
         if (d.lines.some(line => line.unitPrice !== undefined) && d.rowVersion === undefined) throw Object.assign(new Error('调价申请必须携带当前采购单版本，请刷新后重试'), { statusCode: 400 })
         if (d.rowVersion !== undefined && d.rowVersion !== order.rowVersion) throw Object.assign(new Error('采购单已变化，请刷新后重新申请'), { statusCode: 409 })
         const normalized = proposeOrderRevision(order.lines, d.lines)
+        const sameQuantity = normalized.after.every((line, index) => decimal(line.quantity).eq(normalized.before[index].quantity))
+        if (!sameQuantity) throw Object.assign(new Error('供应商调价只能修改单价，不能修改数量'), { statusCode: 400 })
+        if (d.expectedArrivalAt && d.expectedArrivalAt.toISOString() !== order.expectedArrivalAt?.toISOString()) throw Object.assign(new Error('供应商调价不能修改期望到货日'), { statusCode: 400 })
+        const pricesNotRaised = normalized.after.every((line, index) => decimal(line.unitPrice!).lte(normalized.before[index].unitPrice!))
+        const priceReduced = normalized.after.some((line, index) => decimal(line.unitPrice!).lt(normalized.before[index].unitPrice!))
+        const autoAcceptDecrease = sameQuantity && pricesNotRaised && priceReduced
+        if (!priceReduced && pricesNotRaised) throw Object.assign(new Error('单价未变化'), { statusCode: 400 })
         const revisionNo = order.currentRevisionNo + 1
+        const now = new Date()
         const revision = await tx.upstreamPurchaseOrderRevision.create({
           data: {
             tenantId,
             purchaseOrderId: order.id,
             revisionNo,
+            status: autoAcceptDecrease ? 'ACCEPTED' : 'PENDING',
             reason: d.reason,
             beforeSnapshot: {
               expectedArrivalAt: order.expectedArrivalAt?.toISOString() || null,
@@ -2223,8 +2363,42 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
             },
             requestedById: userId,
             requestedByRole: role,
+            reviewedAt: autoAcceptDecrease ? now : null,
+            reviewNote: autoAcceptDecrease ? '降价自动通过' : null,
           },
         })
+        if (autoAcceptDecrease) {
+          const approved = approvedOrderRevision(order.lines, normalized.before, normalized.after)
+          let amountWithoutTax = decimal(0)
+          let taxAmount = decimal(0)
+          let totalAmount = decimal(0)
+          for (const line of order.lines) {
+            const { quantity, unitPrice } = approved.find(row => row.id === line.id)!
+            const baseAmount = money(quantity.times(unitPrice))
+            const lineWithoutTax = order.taxInclusive && line.taxRate.greaterThan(0) ? money(baseAmount.dividedBy(decimal(1).plus(line.taxRate))) : baseAmount
+            const lineTax = order.taxInclusive ? money(baseAmount.minus(lineWithoutTax)) : money(lineWithoutTax.times(line.taxRate))
+            const lineTotal = order.taxInclusive ? baseAmount : money(lineWithoutTax.plus(lineTax))
+            await tx.upstreamPurchaseOrderLine.update({ where: { id: line.id }, data: {
+              orderedQty: quantity, unitPrice, amountWithoutTax: lineWithoutTax, taxAmount: lineTax, totalAmount: lineTotal,
+            } })
+            amountWithoutTax = amountWithoutTax.plus(lineWithoutTax)
+            taxAmount = taxAmount.plus(lineTax)
+            totalAmount = totalAmount.plus(lineTotal)
+          }
+          await tx.upstreamPurchaseOrder.update({ where: { id: order.id }, data: {
+            status: 'SUPPLIER_ACCEPTED', currentRevisionNo: revisionNo,
+            rowVersion: { increment: 1 }, hasTemporaryPrice: true,
+            expectedArrivalAt: d.expectedArrivalAt || order.expectedArrivalAt,
+            amountWithoutTax: money(amountWithoutTax), taxAmount: money(taxAmount), totalAmount: money(totalAmount),
+            supplierAcceptedAt: now,
+          } })
+          await tx.upstreamPurchaseOrderEvent.create({ data: {
+            tenantId, purchaseOrderId: order.id, action: 'AUTO_ACCEPT_DECREASE',
+            fromStatus: order.status, toStatus: 'SUPPLIER_ACCEPTED', actorId: userId, actorRole: role,
+            metadata: { revisionNo },
+          } })
+          return revision
+        }
         await tx.upstreamPurchaseOrder.update({
           where: { id: order.id },
           data: {

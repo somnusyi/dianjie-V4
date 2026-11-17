@@ -76,15 +76,7 @@ export default function BossAssistantPage() {
   return (
     <div className="min-h-screen bg-bg flex flex-col">
       <header className="px-4 pt-4 pb-2 bg-white border-b border-border">
-        <div className="flex items-center justify-between gap-3">
-          <h1 className="text-h1">AI 助手</h1>
-          <a
-            href="/v2/boss/feedback"
-            className="shrink-0 px-3 py-2 rounded-cta bg-white border border-border text-button"
-          >
-            反馈审批
-          </a>
-        </div>
+        <h1 className="text-h1">AI 助手</h1>
         <p className="text-caption text-gray3 mt-0.5">
           告诉我需求，我来开发、测试并安全上线
         </p>

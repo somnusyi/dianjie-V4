@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import Page from './page'
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 const mock = vi.hoisted(() => ({ api: vi.fn(), report: 'group-profit', push: vi.fn() }))
-vi.mock('@/lib/v2-auth', () => ({ apiFetch: mock.api }))
+vi.mock('@/lib/v2-auth', () => ({ apiFetch: mock.api, getUser: () => ({ id: 'user-fixture', role: 'SUPPLY_CHAIN' }) }))
 vi.mock('next/navigation', () => ({ useRouter: () => ({ push: mock.push }), useSearchParams: () => new URLSearchParams({ report: mock.report }) }))
 vi.mock('next/link', () => ({ default: ({ href, children }: any) => <a href={href}>{children}</a> }))
 let root: ReturnType<typeof createRoot> | null = null

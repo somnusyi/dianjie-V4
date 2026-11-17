@@ -96,8 +96,36 @@ export default function SupplierArchivePage() {
   const pendingRequest = useRef<Record<string, unknown> | null>(null)
   const [resultUnknown, setResultUnknown] = useState(false)
   const [notice, setNotice] = useState<string | null>(null)
+  const [inviteUrl, setInviteUrl] = useState<string | null>(null)
+  const [inviting, setInviting] = useState(false)
   const [confirmState, openConfirm] = useConfirmSheet()
   const editorDirty = Boolean(title.trim() || note.trim() || validFrom || validUntil || file)
+
+  async function createSupplierInvite() {
+    if (!supplierId || inviting) return
+    setInviting(true)
+    setError(null)
+    try {
+      const invite = await apiFetch<{ token: string }>(`/api/upstream/suppliers/${encodeURIComponent(supplierId)}/invites`, {
+        method: 'POST',
+        body: JSON.stringify({ role: 'SUPPLIER_OWNER', note: '供应商负责人', expiresHours: 72 }),
+      })
+      const url = `${window.location.origin}/v2/invite/${invite.token}`
+      setInviteUrl(url)
+      let copied = false
+      try {
+        if (navigator.clipboard?.writeText) {
+          await navigator.clipboard.writeText(url)
+          copied = true
+        }
+      } catch { /* The link remains visible for manual copy. */ }
+      setNotice(copied ? '邀请链接已生成并复制' : '邀请链接已生成，请手动复制')
+    } catch (reason: any) {
+      setError(reason?.message || '邀请创建失败')
+    } finally {
+      setInviting(false)
+    }
+  }
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -137,6 +165,20 @@ export default function SupplierArchivePage() {
   }, [supplierId])
 
   useEffect(() => { if (supplierId) void load() }, [load, supplierId])
+  useEffect(() => {
+    const add = new URLSearchParams(window.location.search).get('add')
+    if (add !== 'QUALIFICATION' && add !== 'FINANCE' && add !== 'INVOICE') return
+    try { if (sessionStorage.getItem(pendingStorageKey())) return } catch { return }
+    setEditorSection(add)
+    setTitle('')
+    setNote('')
+    setValidFrom('')
+    setValidUntil('')
+    setFile(null)
+    setEditorError(null)
+    window.history.replaceState(null, '', window.location.pathname)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [supplierId])
   useEffect(() => {
     if (!editorSection || !editorDirty || resultUnknown) return
     const warn = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = '' }
@@ -268,9 +310,8 @@ export default function SupplierArchivePage() {
         <a href="/v2/supply-chain/suppliers" className="text-button text-accent">← 返回上游供应商</a>
         <div className="mt-3 flex flex-wrap items-end justify-between gap-3">
           <div>
-            <div className="flex items-center gap-2"><Chip tone="green">集中档案</Chip><span className="text-caption text-gray3">{data?.supplier.no}</span></div>
+            <div className="flex items-center gap-2"><Chip tone="green">供应商详情</Chip><span className="text-caption text-gray3">{data?.supplier.no}</span></div>
             <h1 className="mt-2 text-h1">{data?.supplier.name || '供应商档案'}</h1>
-            <p className="mt-1 text-caption text-gray2">基础资料、企业资质、现有合同、财务与开票资料集中查看</p>
           </div>
           {data?.permissions.canViewSensitive && (
             <label className="flex items-center gap-2 text-caption text-gray2">
@@ -278,7 +319,12 @@ export default function SupplierArchivePage() {
               查看已归档历史
             </label>
           )}
-          <a href={`/v2/supply-chain/suppliers/${encodeURIComponent(supplierId)}/evidence`} className="rounded-cta bg-accent px-3 py-2 text-button text-white">来货证照与证明 →</a>
+          <div className="flex flex-wrap gap-2">
+            <a href={`/v2/supply-chain/suppliers/${encodeURIComponent(supplierId)}/edit`} className="rounded-cta border border-border bg-white px-3 py-2 text-button">编辑资料</a>
+            <a href={`/v2/supply-chain/suppliers/${encodeURIComponent(supplierId)}/products`} className="rounded-cta border border-border bg-white px-3 py-2 text-button">供货商品</a>
+            <a href="/v2/supply-chain/suppliers/accounts" className="rounded-cta border border-border bg-white px-3 py-2 text-button">供应商账号</a>
+            <a href={`/v2/supply-chain/suppliers/${encodeURIComponent(supplierId)}/evidence`} className="rounded-cta border border-border bg-white px-3 py-2 text-button">来货证照</a>
+          </div>
         </div>
       </header>
 
@@ -288,6 +334,8 @@ export default function SupplierArchivePage() {
 
         {data && (
           <section className="grid gap-3 rounded-card border border-border bg-white p-4 md:grid-cols-2 lg:grid-cols-4">
+            <Info label="供应商编号" value={data.supplier.no} />
+            <Info label="状态" value={data.supplier.status === 'ENABLED' ? '启用' : '停用'} />
             <Info label="联系人" value={data.supplier.contactName || '—'} />
             <Info label="联系电话" value={data.supplier.contactPhone || '—'} />
             <Info label="联系地址" value={data.supplier.address || '—'} />
@@ -298,20 +346,30 @@ export default function SupplierArchivePage() {
         {data && (
           <section className="rounded-card border border-border bg-white p-5">
             <div className="flex flex-wrap items-start justify-between gap-3">
-              <div><h2 className="text-h2">供应商合同</h2><p className="mt-1 text-caption text-gray2">直接复用采购中的合同真相，不重复建第二套合同。</p></div>
-              <a href="/v2/supply-chain/procurement?tab=contracts" className="rounded-cta border border-accent px-3 py-2 text-button text-accent">进入合同管理（全部合同） →</a>
+              <div><h2 className="text-h2">供应商合同</h2></div>
+              <a href={`/v2/supply-chain/suppliers/contracts?supplierId=${encodeURIComponent(supplierId)}`} className="rounded-cta border border-accent px-3 py-2 text-button text-accent">管理合同</a>
             </div>
-            {data.sections.contracts.records.length === 0 ? <EmptyState icon="📄" title="暂无合同" hint="请从采购合同管理创建，创建后会自动出现在这里" /> : (
+            {data.sections.contracts.records.length === 0 ? <EmptyState icon="📄" title="暂无合同" hint="可在供应商合同档案中添加" /> : (
               <div className="mt-4 grid gap-3 md:grid-cols-2">
                 {data.sections.contracts.records.map(contract => (
                   <article key={contract.id} className="rounded-card border border-border p-4">
-                    <div className="flex items-center justify-between gap-2"><b>{contract.title}</b><Chip tone={contract.status === 'ACTIVE' ? 'green' : 'gray'}>{contract.status}</Chip></div>
+                    <div className="flex items-center justify-between gap-2"><b>{contract.title}</b><Chip tone={contract.status === 'ACTIVE' ? 'green' : 'gray'}>{contract.status === 'ACTIVE' ? '已启用' : contract.status === 'DRAFT' ? '草稿' : contract.status === 'EXPIRED' ? '已到期' : contract.status}</Chip></div>
                     <div className="mt-2 text-caption text-gray2">{contract.contractNo} · 版本 {contract.version}</div>
                     <div className="mt-1 text-caption text-gray3">{dateLabel(contract.startsAt)} 至 {dateLabel(contract.endsAt)} · {contract.attachmentCount} 个附件</div>
                   </article>
                 ))}
               </div>
             )}
+          </section>
+        )}
+
+        {data && (
+          <section className="rounded-card border border-border bg-white p-5">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-h2">供应商负责人账号</h2>
+              <button type="button" onClick={() => void createSupplierInvite()} disabled={inviting || data.supplier.status !== 'ENABLED'} className="rounded-cta border border-accent px-3 py-2 text-button text-accent disabled:opacity-40">{inviting ? '生成中…' : '生成邀请链接'}</button>
+            </div>
+            {inviteUrl && <div className="mt-3 break-all rounded-lg bg-bg p-3 text-caption">{inviteUrl}<button type="button" onClick={() => void navigator.clipboard?.writeText(inviteUrl)} className="ml-3 text-accent">复制</button></div>}
           </section>
         )}
 

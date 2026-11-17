@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import React, { act } from 'react'
 import { createRoot } from 'react-dom/client'
+import { Simulate } from 'react-dom/test-utils'
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import BillingPage from './page'
 
@@ -127,6 +128,68 @@ function dialog(container: HTMLElement) {
 }
 
 describe('账务查询详情', () => {
+  it('账期列表、日期筛选和详情都使用同一个北京日期', async () => {
+    const row = { ...scheduleList[0], dueAt: '2026-11-05T17:15:00Z' }
+    const routes = { ...defaultRoutes(), '/api/schedules': [row], '/api/schedules/s1': { ...scheduleDetailS1, dueAt: row.dueAt } }
+    const { container, root } = await renderBilling(routing(routes))
+    await waitFor(() => viewButtons(container).length === 1)
+    expect(container.querySelector('tbody')?.textContent).toContain('2026-11-06')
+    const fields = container.querySelectorAll('input[type=date]')
+    act(() => {
+      Simulate.change(fields[0], { target: { value: '2026-11-06' } } as any)
+      Simulate.change(fields[1], { target: { value: '2026-11-06' } } as any)
+    })
+    expect(viewButtons(container)).toHaveLength(1)
+    act(() => viewButtons(container)[0].click())
+    await waitFor(() => Boolean(dialog(container)?.textContent?.includes('付款日期')))
+    expect(dialog(container)?.textContent).toContain('到期日2026-11-06')
+    act(() => buttonByText(dialog(container)!, '×')!.click())
+    act(() => Simulate.change(fields[1], { target: { value: '2026-11-05' } } as any))
+    expect(container.textContent).toContain('结束日期不能早于开始日期')
+    expect(viewButtons(container)).toHaveLength(0)
+    act(() => root.unmount())
+  })
+
+  it('等待第二页才显示52张发票，包含旧票且不展示半份50张', async () => {
+    const rest = deferred<any[]>()
+    const rows = Array.from({length:52}, (_,i)=>({...invoiceList[0],id:`page-invoice-${i}`,invoiceNo:`FP${i}`,status:'PENDING'}))
+    const base = routing({...defaultRoutes(), '/api/invoices': rows.slice(0,50)})
+    const {container,root}=await renderBilling((url:any)=>String(url).includes('/api/invoices?cursor=')?rest.promise:base(url))
+    await act(async()=>{await Promise.resolve()})
+    expect(container.textContent).not.toContain('发票 50')
+    await act(async()=>rest.resolve(rows.slice(50)))
+    await waitFor(()=>container.textContent?.includes('发票 52')??false)
+    expect(container.textContent).toContain('待审发票52 张')
+    act(()=>buttonByText(container,'发票 52')!.click())
+    expect(container.textContent).toContain('FP51')
+    act(()=>root.unmount())
+  })
+  it('第二页失败显示错误及未知数，禁止导出半份列表', async () => {
+    const rows=Array.from({length:50},(_,i)=>({...invoiceList[0],id:`failed-${i}`}))
+    const base=routing({...defaultRoutes(),'/api/invoices':rows})
+    const {container,root}=await renderBilling((url:any)=>String(url).includes('/api/invoices?cursor=')?Promise.reject(new Error('发票第二页失败')):base(url))
+    await waitFor(()=>container.textContent?.includes('发票第二页失败')??false)
+    expect(container.textContent).toContain('发票 —')
+    expect(container.textContent).not.toContain('发票 50')
+    expect(Array.from(container.querySelectorAll('button')).find(x=>x.textContent?.includes('导出当前'))?.disabled).toBe(true)
+    act(()=>root.unmount())
+  })
+
+  it('本月已付排除往年同月和本年其他月，保留真实当月金额', async () => {
+    const now = new Date()
+    const paidAt = (year: number, month: number) => new Date(year, month, 12, 12).toISOString()
+    const routes = { ...defaultRoutes(), '/api/schedules': [
+      { ...scheduleList[0], id: 'current', amount: '22.22', paidAt: paidAt(now.getFullYear(), now.getMonth()) },
+      { ...scheduleList[0], id: 'last-year', amount: '55.55', paidAt: paidAt(now.getFullYear() - 1, now.getMonth()) },
+      { ...scheduleList[0], id: 'other-month', amount: '33.33', paidAt: paidAt(now.getFullYear(), now.getMonth() - 1) },
+      { ...scheduleList[0], id: 'no-date', amount: '44.44', paidAt: null },
+      { ...scheduleList[1], id: 'unpaid', amount: '66.66', paidAt: paidAt(now.getFullYear(), now.getMonth()) },
+    ] }
+    const { container, root } = await renderBilling(routing(routes))
+    await waitFor(() => container.textContent?.includes('账期 5') ?? false)
+    expect(container.querySelector('section')?.children[2].textContent).toBe('本月已付¥22.22')
+    act(() => root.unmount())
+  })
   it('账期行提供可点击查看入口并经真实详情请求展示完整详情', async () => {
     const { container, root } = await renderBilling(routing(defaultRoutes()))
     await waitFor(() => container.textContent?.includes('RK001') ?? false)
@@ -464,5 +527,35 @@ describe('账务查询详情', () => {
     expect(csvButton!.hasAttribute('disabled')).toBe(false)
 
     act(() => root.unmount())
+  })
+})
+
+describe('账务未知数与真实零', () => {
+  it.each(['/api/schedules', '/api/reconciliations', '/api/invoices'])('%s失败不能显示三项业务金额或计数为零', async failedPath => {
+    const base = routing(defaultRoutes())
+    const { container, root } = await renderBilling(path => path === failedPath ? Promise.reject(new Error('本地来源不可用')) : base(path))
+    try {
+      await waitFor(() => container.textContent?.includes('本地来源不可用') ?? false)
+      expect(Array.from(container.querySelector('section')!.children).map(x => x.textContent)).toEqual(['未付账期—', '其中逾期—', '本月已付—', '待审发票—'])
+      expect(buttonByText(container, '账期 —')).toBeDefined()
+      expect(buttonByText(container, '对账单 —')).toBeDefined()
+      expect(container.textContent).toContain('筛选后 — 笔 · 合计 —')
+      expect(container.textContent).not.toContain('暂无记录')
+    } finally { act(() => root.unmount()) }
+  })
+  it('等待完整列表时保持未知，完成真实空列表后才显示零', async () => {
+    const pending = deferred<any[]>()
+    const { container, root } = await renderBilling(path => path === '/api/invoices' ? pending.promise : [])
+    try {
+      expect(container.textContent).toContain('未付账期—')
+      expect(buttonByText(container, '账期 —')).toBeDefined()
+      expect(container.textContent).toContain('筛选后 — 笔 · 合计 —')
+      await act(async () => pending.resolve([]))
+      await waitFor(() => !!buttonByText(container, '账期 0'))
+      expect(container.textContent).toContain('未付账期¥0')
+      expect(container.textContent).toContain('本月已付¥0')
+      expect(container.textContent).toContain('筛选后 0 笔 · 合计 ¥0')
+      expect(container.textContent).toContain('暂无记录')
+    } finally { act(() => root.unmount()) }
   })
 })

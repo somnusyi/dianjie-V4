@@ -2,6 +2,7 @@ import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import { z } from 'zod'
 import { invalidatePattern } from '../lib/cache'
+import { supplyChainProductScope } from '../lib/supply-chain-product-scope'
 
 /**
  * 供应商维度的供货关系管理（对齐美团「供应商档案-供货关系」）。
@@ -131,7 +132,7 @@ export const supplierUpstreamProductRoutes: FastifyPluginAsync = async app => {
 
     const productIds = [...new Set(parsed.data.items.map(item => item.productId))]
     const products = await prisma.product.findMany({
-      where: { id: { in: productIds }, tenantId, status: 'ENABLED' },
+      where: { id: { in: productIds }, tenantId, status: 'ENABLED', ...supplyChainProductScope(tenantId) },
       select: { id: true, code: true, name: true },
     })
     if (products.length !== productIds.length) {
@@ -328,6 +329,7 @@ export const upstreamRelationsRoutes: FastifyPluginAsync = async app => {
         tenantId,
         status: 'ENABLED',
         upstreamSources: { none: { isActive: true } },
+        ...supplyChainProductScope(tenantId),
       },
       select: PRODUCT_SNAPSHOT_SELECT,
       orderBy: [{ category: 'asc' }, { code: 'asc' }],

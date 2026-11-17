@@ -310,7 +310,7 @@ describe('HEADQ warehouse order entry stock guard (integration)', () => {
     expect(await prisma.businessSequence.count({ where: { tenantId } })).toBe(0)
   })
 
-  it('allows zero-stock submission when the policy is reminder-only even though ledger mode remains STRICT', async () => {
+  it('rejects zero-stock submission even when the old entry policy is reminder-only', async () => {
     await prisma.warehouse.update({
       where: { id: warehouseId },
       data: { blockZeroStockAtOrderEntry: false },
@@ -328,15 +328,15 @@ describe('HEADQ warehouse order entry stock guard (integration)', () => {
       },
     })
 
-    expect(response.statusCode).toBe(200)
-    expect(response.json()).toMatchObject({ status: 'SUBMITTED', supplierId, storeId })
-    expect(await prisma.purchaseOrder.count({ where: { tenantId, status: 'SUBMITTED' } })).toBe(1)
+    expect(response.statusCode).toBe(409)
+    expect(response.json().message || response.json().error).toContain('库存不足')
+    expect(await prisma.purchaseOrder.count({ where: { tenantId, status: 'SUBMITTED' } })).toBe(0)
     const warehouse = await prisma.warehouse.findUniqueOrThrow({ where: { id: warehouseId } })
     expect(warehouse.inventoryMode).toBe('STRICT')
     expect(warehouse.blockZeroStockAtOrderEntry).toBe(false)
   })
 
-  it('allows an order larger than positive available stock because this policy only blocks exact zero', async () => {
+  it('rejects an order larger than positive available stock before committing submission', async () => {
     await prisma.warehouse.update({
       where: { id: warehouseId },
       data: { blockZeroStockAtOrderEntry: true },
@@ -358,12 +358,12 @@ describe('HEADQ warehouse order entry stock guard (integration)', () => {
       },
     })
 
-    expect(response.statusCode).toBe(200)
-    expect(response.json()).toMatchObject({ status: 'SUBMITTED', supplierId, storeId })
-    expect(await prisma.purchaseOrder.count({ where: { tenantId, status: 'SUBMITTED' } })).toBe(2)
+    expect(response.statusCode).toBe(409)
+    expect(response.json().message || response.json().error).toContain('库存不足')
+    expect(await prisma.purchaseOrder.count({ where: { tenantId, status: 'SUBMITTED' } })).toBe(0)
   })
 
-  it('allows store submission to an external STRICT supplier with zero supplier stock', async () => {
+  it('rejects store submission to an external STRICT supplier with zero supplier stock', async () => {
     const supplier = await prisma.supplier.findUniqueOrThrow({ where: { id: externalSupplierId } })
     const product = await prisma.product.findUniqueOrThrow({ where: { id: externalProductId } })
     expect(supplier).toMatchObject({ sourceType: 'MAIN_SUPPLIER', inventoryMode: 'STRICT' })
@@ -384,15 +384,11 @@ describe('HEADQ warehouse order entry stock guard (integration)', () => {
       },
     })
 
-    expect(response.statusCode).toBe(200)
-    expect(response.json()).toMatchObject({
-      status: 'SUBMITTED',
-      supplierId: externalSupplierId,
-      storeId,
-    })
+    expect(response.statusCode).toBe(409)
+    expect(response.json().message || response.json().error).toContain('库存不足')
     expect(await prisma.purchaseOrder.count({
       where: { tenantId, supplierId: externalSupplierId, status: 'SUBMITTED' },
-    })).toBe(1)
+    })).toBe(0)
   })
 
   it('requires and freezes the actual HEADQ picker and binds it to idempotent shipment replay', async () => {

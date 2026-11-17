@@ -179,3 +179,22 @@ it('order row displays its own arrival buttons and opens the selected batch dire
  expect(document.querySelector('[aria-label="选择质检商品"]')).toBeNull()
  act(()=>root.unmount());host.remove()
 })
+
+it('unsaved uploads survive backdrop and close; only an explicit discard closes without saving',async()=>{
+ mock.mockImplementation((path,init)=>String(path).startsWith('/api/upload')?Promise.resolve(uploaded):Promise.resolve(initial))
+ const {element,root,close}=mount();await wait(()=>Boolean(element.querySelector('input')));await upload(element)
+ act(()=>element.click());expect(close).not.toHaveBeenCalled();expect(element.textContent).toContain('质检图片尚未保存')
+ act(()=>Array.from(element.querySelectorAll('button')).find(b=>b.textContent==='继续查看')!.click());expect(element.textContent).toContain('待保存：一.png')
+ act(()=>Array.from(element.querySelectorAll('button')).find(b=>b.textContent==='关闭')!.click());expect(close).not.toHaveBeenCalled()
+ act(()=>Array.from(element.querySelectorAll('button')).find(b=>b.textContent==='放弃并关闭')!.click());expect(close).toHaveBeenCalledOnce()
+ expect(mock.mock.calls.filter(([,init])=>init?.method==='POST'&&typeof init?.body==='string')).toHaveLength(0)
+ act(()=>root.unmount());element.remove()
+})
+it('save-and-close waits for a successful image save',async()=>{
+ let fail=true;mock.mockImplementation((path,init)=>String(path).startsWith('/api/upload')?Promise.resolve(uploaded):init?.method==='POST'?(fail?Promise.reject(Object.assign(Error('校验未通过'),{status:400})):Promise.resolve({version:1})):Promise.resolve(initial))
+ const {element,root,close}=mount();await wait(()=>Boolean(element.querySelector('input')));await upload(element);act(()=>element.click())
+ const button=()=>Array.from(element.querySelectorAll('button')).find(b=>b.textContent==='保存并关闭')!
+ await act(async()=>button().click());expect(close).not.toHaveBeenCalled();expect(element.textContent).toContain('待保存：一.png')
+ fail=false;await act(async()=>button().click());expect(close).toHaveBeenCalledOnce()
+ act(()=>root.unmount());element.remove()
+})

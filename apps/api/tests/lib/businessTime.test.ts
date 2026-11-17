@@ -3,8 +3,10 @@ import {
   BUSINESS_TZ,
   businessCompactTimestampKey,
   businessDateRangeInclusive,
+  businessDateOnlyRange,
   businessDateKey,
   businessMonthKey,
+  businessPeriodToDateRange,
   businessTimestampKey,
 } from '../../src/lib/businessTime'
 
@@ -48,6 +50,57 @@ describe('businessTime', () => {
       expect(range.start.toISOString()).toBe('2026-08-31T16:00:00.000Z')
       expect(range.end.toISOString()).toBe('2026-09-29T16:00:00.000Z')
       expect(range.endExclusive.toISOString()).toBe('2026-09-30T16:00:00.000Z')
+    })
+  })
+
+  it('interprets DATE values using Shanghai day boundaries', () => {
+    const range = businessDateOnlyRange(new Date('2026-10-20T00:00:00Z'))
+    expect(range.start.toISOString()).toBe('2026-10-19T16:00:00.000Z')
+    expect(range.endExclusive.toISOString()).toBe('2026-10-20T16:00:00.000Z')
+  })
+
+  describe('businessPeriodToDateRange', () => {
+    it('uses Shanghai day and exclusive next midnight', () => {
+      const range = businessPeriodToDateRange('2026-11-16', 'DAY')
+      expect(range.start.toISOString()).toBe('2026-11-15T16:00:00.000Z')
+      expect(range.endExclusive.toISOString()).toBe('2026-11-16T16:00:00.000Z')
+    })
+
+    it('uses ISO Monday and stops at the selected Sunday rather than reading the future', () => {
+      const range = businessPeriodToDateRange('2026-11-22', 'WEEK')
+      expect(range.start.toISOString()).toBe('2026-11-15T16:00:00.000Z')
+      expect(range.endExclusive.toISOString()).toBe('2026-11-22T16:00:00.000Z')
+    })
+
+    it('keeps Monday as the first day and month at Shanghai midnight', () => {
+      expect(businessPeriodToDateRange('2026-11-16', 'WEEK').start.toISOString()).toBe('2026-11-15T16:00:00.000Z')
+      expect(businessPeriodToDateRange('2026-11-30', 'MONTH').start.toISOString()).toBe('2026-10-31T16:00:00.000Z')
+    })
+
+    it('does not inherit Los Angeles DST when building Shanghai date boundaries', () => {
+      const originalTimezone = process.env.TZ
+      process.env.TZ = 'America/Los_Angeles'
+      try {
+        for (const key of ['2026-03-08', '2026-11-01']) {
+          const dateOnly = businessDateOnlyRange(key)
+          const day = businessPeriodToDateRange(key, 'DAY')
+          expect(day).toEqual(dateOnly)
+          expect(day.start.toISOString().endsWith('T16:00:00.000Z')).toBe(true)
+          expect(day.endExclusive.getTime() - day.start.getTime()).toBe(24 * 60 * 60 * 1000)
+        }
+        expect(businessPeriodToDateRange('2026-03-08', 'WEEK')).toEqual({
+          start: new Date('2026-03-01T16:00:00.000Z'), endExclusive: new Date('2026-03-08T16:00:00.000Z'),
+        })
+        expect(businessPeriodToDateRange('2026-11-01', 'WEEK')).toEqual({
+          start: new Date('2026-10-25T16:00:00.000Z'), endExclusive: new Date('2026-11-01T16:00:00.000Z'),
+        })
+        expect(businessPeriodToDateRange('2026-03-08', 'MONTH').start.toISOString()).toBe('2026-02-28T16:00:00.000Z')
+        expect(businessPeriodToDateRange('2026-11-01', 'MONTH').start.toISOString()).toBe('2026-10-31T16:00:00.000Z')
+        expect(businessDateRangeInclusive('2026-11-01', '2026-11-01').endExclusive.toISOString()).toBe('2026-11-01T16:00:00.000Z')
+      } finally {
+        if (originalTimezone === undefined) delete process.env.TZ
+        else process.env.TZ = originalTimezone
+      }
     })
   })
 

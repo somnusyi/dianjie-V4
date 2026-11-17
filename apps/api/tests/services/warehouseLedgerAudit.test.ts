@@ -12,13 +12,41 @@ function validRows() {
       { id: 'm2', type: 'ORDER_RESERVED', productId: 'p1', inventoryUnit: '袋', physicalDelta: 0, reservedDelta: 2, valueDelta: 0, physicalAfter: 16, reservedAfter: 2, valueAfter: 160, recordedAt: new Date(now.getTime() - 500) },
       { id: 'm3', type: 'ORDER_OUTBOUND', productId: 'p1', inventoryUnit: '袋', physicalDelta: -4, reservedDelta: 0, valueDelta: -40, physicalAfter: 12, reservedAfter: 2, valueAfter: 120, recordedAt: now },
     ],
-    activeReservations: [{ productId: 'p1', inventoryUnit: '袋', inventoryQuantity: 2, orderStatus: 'CONFIRMED' }],
+    activeReservations: [{ productId: 'p1', inventoryUnit: '袋', inventoryQuantity: 2, orderStatus: 'CONFIRMED', submittedSnapshot: null as unknown }],
     lots: [{ productId: 'p1', inventoryUnit: '袋', remainingQty: 12 }],
     requiredProducts: [{ id: 'p1', unitConversionStatus: 'VERIFIED' }],
   }
 }
 
 describe('warehouse ledger audit', () => {
+  it('only accepts an active replenishment hold while its own request is submitted', () => {
+    const rows = validRows()
+    const hold = { ...rows.activeReservations[0], reservationSource: 'REPLENISHMENT' as const, orderStatus: 'SUBMITTED', submittedSnapshot: { stockReservationPolicy: 'SUBMISSION_V1' } }
+    expect(buildWarehouseLedgerAudit({ ...rows, activeReservations: [hold] })).toMatchObject({ blockerCount: 0 })
+    hold.orderStatus = 'ACCEPTED'
+    expect(buildWarehouseLedgerAudit({ ...rows, activeReservations: [hold] }).issues).toEqual(expect.arrayContaining([expect.objectContaining({ code: 'ACTIVE_RESERVATION_ORDER_STATUS_INVALID' })]))
+  })
+
+  it('accepts a submitted order only when its frozen policy reserves at submission', () => {
+    const rows = validRows()
+    rows.activeReservations[0].orderStatus = 'SUBMITTED'
+    rows.activeReservations[0].submittedSnapshot = { stockReservationPolicy: 'SUBMISSION_V1' }
+    expect(buildWarehouseLedgerAudit(rows)).toMatchObject({ readyForStrict: true, blockerCount: 0 })
+  })
+
+  it.each([
+    ['SUBMITTED', null],
+    ['SUBMITTED', { stockReservationPolicy: 'UNKNOWN' }],
+    ['CANCELLED', { stockReservationPolicy: 'SUBMISSION_V1' }],
+    ['COMPLETED', { stockReservationPolicy: 'SUBMISSION_V1' }],
+  ])('still blocks an active hold for invalid order status/policy %s', (status, snapshot) => {
+    const rows = validRows()
+    rows.activeReservations[0].orderStatus = status
+    rows.activeReservations[0].submittedSnapshot = snapshot
+    expect(buildWarehouseLedgerAudit(rows).issues).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'ACTIVE_RESERVATION_ORDER_STATUS_INVALID' }),
+    ]))
+  })
   it('allows strict activation only when all four books reconcile', () => {
     const result = buildWarehouseLedgerAudit(validRows())
     expect(result).toMatchObject({ readyForStrict: true, blockerCount: 0, checkedSku: 1 })
@@ -69,6 +97,8 @@ describe('warehouse ledger audit', () => {
 
   it('reads every audit book through the supplied transaction client', async () => {
     const rows = validRows()
+    rows.activeReservations[0].orderStatus = 'SUBMITTED'
+    rows.activeReservations[0].submittedSnapshot = { stockReservationPolicy: 'SUBMISSION_V1' }
     const db = {
       warehouse: {
         findFirstOrThrow: vi.fn().mockResolvedValue({
@@ -83,10 +113,12 @@ describe('warehouse ledger audit', () => {
           productId: row.productId,
           inventoryUnit: row.inventoryUnit,
           inventoryQuantity: row.inventoryQuantity,
-          purchaseOrder: { status: row.orderStatus },
+          purchaseOrder: { status: row.orderStatus, submittedSnapshot: row.submittedSnapshot },
         }))),
       },
+      replenishmentStockHold: { findMany: vi.fn().mockResolvedValue([]) },
       warehouseLedgerLot: { findMany: vi.fn().mockResolvedValue(rows.lots) },
+      replenishmentStockHold: { findMany: vi.fn().mockResolvedValue([]) },
       product: { findMany: vi.fn().mockResolvedValue(rows.requiredProducts) },
     } as any
 
@@ -99,7 +131,16 @@ describe('warehouse ledger audit', () => {
     expect(db.warehouseLedgerBalance.findMany).toHaveBeenCalledOnce()
     expect(db.warehouseLedgerMovement.findMany).toHaveBeenCalledOnce()
     expect(db.warehouseLedgerReservation.findMany).toHaveBeenCalledOnce()
+    expect(db.warehouseLedgerReservation.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      select: expect.objectContaining({ purchaseOrder: { select: { status: true, submittedSnapshot: true } } }),
+    }))
     expect(db.warehouseLedgerLot.findMany).toHaveBeenCalledOnce()
+    expect(db.replenishmentStockHold.findMany).toHaveBeenCalledOnce()
     expect(db.product.findMany).toHaveBeenCalledOnce()
+    expect(db.replenishmentStockHold.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { tenantId: 'tenant-1', warehouseId: 'warehouse-1', status: 'ACTIVE' } }))
+    // One PO unit plus one RO unit must reconcile to the same reserved balance of two.
+    db.warehouseLedgerReservation.findMany.mockResolvedValue([{ productId: 'p1', inventoryUnit: '袋', inventoryQuantity: 1, purchaseOrder: { status: 'CONFIRMED' } }])
+    db.replenishmentStockHold.findMany.mockResolvedValue([{ productId: 'p1', inventoryUnit: '袋', inventoryQuantity: 1, replenishmentOrder: { status: 'SUBMITTED', stockReservationPolicy: 'SUBMISSION_V1' } }])
+    expect(await auditWarehouseLedger('tenant-1', db, 'warehouse-1')).toMatchObject({ readyForStrict: true, blockerCount: 0 })
   })
 })

@@ -149,289 +149,27 @@ describe('feedback system flow (integration)', () => {
     await prisma.$disconnect()
   })
 
-  it('完整流: 创建 → AI 首轮澄清 → 用户回复 → triage IMPROVEMENT → inbox → approve → 状态/OpLog/消息中心', async () => {
-    // 1. 创建反馈: AI 首轮主动澄清
-    qwenQueue.push('收到！为了更好地定位，想确认两点：1) 是在哪个页面想放大图片？2) 是点图片没反应吗？')
+  it('提交和补充反馈后保留记录，不产生审批或自动开发任务', async () => {
+    qwenQueue.push('收到，请补充具体页面和操作。')
     const created = await inject('reporter', 'POST', '/api/feedback', {
       content: '验收照片看不太清楚，希望改进一下',
-      context: { path: '/v2/chef/purchase', storeName: '瑶海店', userAgent: 'test-agent', clientTime: '2026-07-26 10:00' },
-      attachments: ['https://example.com/a.jpg'],
+      context: { path: '/v2/chef/purchase', storeName: '瑶海店' },
     })
     expect(created.statusCode).toBe(201)
-    const { id, status, reply } = created.json()
-    expect(status).toBe('CLARIFYING')
-    expect(reply).toContain('正在后台整理')
-    expect(created.json().processing).toBe(true)
+    const { id } = created.json()
+    await waitForFeedback(id, (item) => item.messages.some((m: any) => m.role === 'assistant'))
 
-    let fb = await waitForFeedback(id, (item) => item.messages.some((m: any) => m.role === 'assistant'))
-    expect(fb!.tenantId).toBe(tenantA)
-    expect(fb!.reporterId).toBe(reporterId)
-    expect((fb!.context as any).path).toBe('/v2/chef/purchase')
-    expect(fb!.messages).toHaveLength(2) // user + assistant
-    expect(fb!.messages.find((m: any) => m.role === 'assistant')?.content).toContain('哪个页面')
-
-    // 2. 用户回复 → AI 分诊 IMPROVEMENT
-    qwenQueue.push('明白了，验收图片需要能放大看细节。已为你整理好方案提交管理员审批。\n```json\n{"triage":{"category":"IMPROVEMENT","title":"验收图片支持放大查看","summary":"验收照片无法放大,细节看不清,希望点击可全屏放大","sufficient":true}}\n```')
-    const replied = await inject('reporter', 'POST', `/api/feedback/${id}/messages`, {
-      content: '在验收页面，点图片没反应，不能放大',
-    })
+    qwenQueue.push('已记录这项改进建议。\n```json\n{"triage":{"category":"IMPROVEMENT","title":"验收照片支持放大查看","summary":"验收照片看不清","sufficient":true}}\n```')
+    const replied = await inject('reporter', 'POST', `/api/feedback/${id}/messages`, { content: '点图片后不能放大' })
     expect(replied.statusCode).toBe(202)
-    const body = replied.json()
-    expect(body.status).toBe('CLARIFYING')
-    expect(body.processing).toBe(true)
-    expect(body.reply).toContain('正在后台整理')
-
-    fb = await waitForFeedback(id, (item) => item.status === 'AWAITING_APPROVAL')
-    expect(fb!.status).toBe('AWAITING_APPROVAL')
-    expect(fb!.category).toBe('IMPROVEMENT')
-    expect(fb!.title).toBe('验收图片支持放大查看')
-    expect(fb!.summary).toContain('放大')
-    const latestAssistant = [...fb!.messages].reverse().find((m: any) => m.role === 'assistant')
-    expect(latestAssistant?.content).not.toContain('```')
-    expect(latestAssistant?.content).toContain('提交管理员审批')
-    // system 进度提示消息已写入
-    expect(fb!.messages.some((m) => m.role === 'system' && m.content.includes('提交给管理员审批'))).toBe(true)
-
-    // 3. 管理端 inbox 出现该反馈
-    const inbox = await inject('admin', 'GET', '/api/feedback/admin/inbox')
-    expect(inbox.statusCode).toBe(200)
-    const items = inbox.json()
-    const hit = items.find((i: any) => i.id === id)
-    expect(hit).toBeTruthy()
-    expect(hit.reporter.name).toBe('反馈店长')
-    expect(hit.storeName).toBe('瑶海店')
-
-    // 非管理员不能看 inbox
-    const inboxForbidden = await inject('reporter', 'GET', '/api/feedback/admin/inbox')
-    expect(inboxForbidden.statusCode).toBe(403)
-
-    // 4. 驳回必须给理由
-    const rejectNoNote = await inject('admin', 'POST', `/api/feedback/${id}/decision`, { action: 'reject' })
-    expect(rejectNoNote.statusCode).toBe(400)
-
-    // 5. 批准 → IN_DEV + OpLog + 消息中心通知
-    const approved = await inject('admin', 'POST', `/api/feedback/${id}/decision`, { action: 'approve' })
-    expect(approved.statusCode).toBe(200)
-    expect(approved.json()).toMatchObject({
-      ok: true,
-      autoRunId: null,
-      automationStatus: 'disabled',
-    })
-    fb = await prisma.feedback.findUnique({ where: { id } })
-    expect(fb!.status).toBe('IN_DEV')
-    expect(fb!.decisionById).toBe(adminId)
-    expect(fb!.decisionAt).toBeTruthy()
-
-    const opLog = await prisma.opLog.findFirst({
-      where: { tenantId: tenantA, entityType: 'Feedback', targetId: id },
-    })
-    expect(opLog).toBeTruthy()
-    expect(opLog!.action).toContain('批准')
-
-    const inapp = await prisma.notification.findFirst({
-      where: { tenantId: tenantA, recipientId: reporterId, type: 'FEEDBACK_RESULT', refId: id },
-    })
-    expect(inapp).toBeTruthy()
-    expect(inapp!.title).toContain('已批准')
-
-    // 已决策后不能重复审批
-    const again = await inject('admin', 'POST', `/api/feedback/${id}/decision`, { action: 'approve' })
-    expect(again.statusCode).toBe(400)
-  })
-
-  it('管理员批准是唯一授权点，启用 suggest 时才创建带审批人的自动开发任务', async () => {
-    const feedback = await prisma.feedback.create({
-      data: {
-        tenantId: tenantA,
-        reporterId,
-        category: 'IMPROVEMENT',
-        status: 'AWAITING_APPROVAL',
-        title: '自动开发入队验证',
-        summary: '批准后才允许系统读取源码并生成补丁',
-        context: { path: '/route-that-does-not-exist' },
-      },
-    })
-
-    process.env.AUTO_FIX_MODE = 'suggest'
-    process.env.AUTO_FIX_REPO_DIR = '/definitely-missing-autofix-repo'
-    try {
-      const response = await inject('admin', 'POST', `/api/feedback/${feedback.id}/decision`, {
-        action: 'approve',
-      })
-      expect(response.statusCode).toBe(200)
-      const body = response.json()
-      expect(body.automationStatus).toBe('agent_dev')
-      expect(body.autoRunId).toBeTruthy()
-
-      const run = await prisma.autoFixRun.findUnique({ where: { id: body.autoRunId } })
-      expect(run?.feedbackId).toBe(feedback.id)
-      expect(run?.decidedById).toBe(adminId)
-      expect(run?.decidedAt).toBeTruthy()
-
-      for (let attempt = 0; attempt < 30; attempt++) {
-        const current = await prisma.autoFixRun.findUnique({ where: { id: body.autoRunId } })
-        if (current?.status === 'ESCALATED') break
-        await new Promise((resolve) => setTimeout(resolve, 20))
-      }
-      expect((await prisma.autoFixRun.findUnique({ where: { id: body.autoRunId } }))?.status)
-        .toBe('ESCALATED')
-    } finally {
-      process.env.AUTO_FIX_MODE = 'off'
-      if (oldRepoDir === undefined) delete process.env.AUTO_FIX_REPO_DIR
-      else process.env.AUTO_FIX_REPO_DIR = oldRepoDir
-    }
-  })
-
-  it('并发批准只创建一个自动开发任务、决策审计和结果通知', async () => {
-    const feedback = await prisma.feedback.create({
-      data: {
-        tenantId: tenantA,
-        reporterId,
-        category: 'BUG_BLOCKING',
-        status: 'AWAITING_APPROVAL',
-        title: '并发批准自动开发验证',
-        summary: '双击批准时只能创建一个自动开发任务',
-        context: { path: '/route-that-does-not-exist-concurrently' },
-      },
-    })
-
-    expect((await inject(
-      'adminB',
-      'POST',
-      `/api/feedback/${feedback.id}/decision`,
-      { action: 'approve' },
-    )).statusCode).toBe(404)
-
-    process.env.AUTO_FIX_MODE = 'suggest'
-    process.env.AUTO_FIX_REPO_DIR = '/definitely-missing-autofix-repo'
-    try {
-      const responses = await Promise.all([
-        inject('admin', 'POST', `/api/feedback/${feedback.id}/decision`, { action: 'approve' }),
-        inject('admin', 'POST', `/api/feedback/${feedback.id}/decision`, { action: 'approve' }),
-      ])
-      expect(responses.map((response) => response.statusCode).sort()).toEqual([200, 400])
-      const accepted = responses.find((response) => response.statusCode === 200)!
-      expect(accepted.json()).toMatchObject({
-        automationStatus: 'agent_dev',
-      })
-      expect(accepted.json().autoRunId).toBeTruthy()
-
-      const runs = await prisma.autoFixRun.findMany({
-        where: { feedbackId: feedback.id },
-      })
-      expect(runs).toHaveLength(1)
-      expect(runs[0].id).toBe(accepted.json().autoRunId)
-      expect(runs[0].decidedById).toBe(adminId)
-
-      for (let attempt = 0; attempt < 30; attempt++) {
-        const current = await prisma.autoFixRun.findUnique({ where: { id: runs[0].id } })
-        if (current?.status === 'ESCALATED') break
-        await new Promise((resolve) => setTimeout(resolve, 20))
-      }
-      expect((await prisma.autoFixRun.findUnique({ where: { id: runs[0].id } }))?.status)
-        .toBe('ESCALATED')
-      expect((await prisma.feedback.findUnique({ where: { id: feedback.id } }))?.status)
-        .toBe('IN_DEV')
-      expect(await prisma.opLog.count({
-        where: {
-          tenantId: tenantA,
-          entityType: 'Feedback',
-          targetId: feedback.id,
-        },
-      })).toBe(1)
-      expect(await prisma.feedbackMessage.count({
-        where: {
-          tenantId: tenantA,
-          feedbackId: feedback.id,
-          role: 'system',
-          content: { contains: '管理员已批准该方案' },
-        },
-      })).toBe(1)
-      expect(await prisma.feedbackMessage.count({
-        where: {
-          tenantId: tenantA,
-          feedbackId: feedback.id,
-          role: 'system',
-          content: { contains: 'AI 开始自动设计方案' },
-        },
-      })).toBe(1)
-      expect(await prisma.notification.count({
-        where: {
-          tenantId: tenantA,
-          recipientId: reporterId,
-          type: 'FEEDBACK_RESULT',
-          refId: feedback.id,
-        },
-      })).toBe(1)
-    } finally {
-      process.env.AUTO_FIX_MODE = 'off'
-      if (oldRepoDir === undefined) delete process.env.AUTO_FIX_REPO_DIR
-      else process.env.AUTO_FIX_REPO_DIR = oldRepoDir
-    }
-  })
-
-  it('并发解决只闭环一次，并保持权限与租户隔离', async () => {
-    const feedback = await prisma.feedback.create({
-      data: {
-        tenantId: tenantA,
-        reporterId,
-        category: 'BUG_BLOCKING',
-        status: 'IN_DEV',
-        title: '并发解决闭环验证',
-        summary: '同一反馈只能被解决一次',
-        context: { path: '/v2/manager/home' },
-      },
-    })
-
-    expect((await inject(
-      'reporter',
-      'POST',
-      `/api/feedback/${feedback.id}/resolve`,
-      { note: '经理不能代替超管闭环' },
-    )).statusCode).toBe(403)
-    expect((await inject(
-      'adminB',
-      'POST',
-      `/api/feedback/${feedback.id}/resolve`,
-      { note: '跨租户不得闭环' },
-    )).statusCode).toBe(404)
-    expect((await prisma.feedback.findUnique({ where: { id: feedback.id } }))?.status)
-      .toBe('IN_DEV')
-
-    const notes = ['并发解决 A', '并发解决 B']
-    const responses = await Promise.all(notes.map((note) => inject(
-      'admin',
-      'POST',
-      `/api/feedback/${feedback.id}/resolve`,
-      { note },
-    )))
-    expect(responses.map((response) => response.statusCode).sort()).toEqual([200, 400])
-    expect((await prisma.feedback.findUnique({ where: { id: feedback.id } }))?.status)
-      .toBe('RESOLVED')
-    expect(await prisma.opLog.count({
-      where: {
-        tenantId: tenantA,
-        entityType: 'Feedback',
-        targetId: feedback.id,
-      },
-    })).toBe(1)
-    const messages = await prisma.feedbackMessage.findMany({
-      where: {
-        tenantId: tenantA,
-        feedbackId: feedback.id,
-        role: 'assistant',
-      },
-    })
-    expect(messages).toHaveLength(1)
-    expect(notes).toContain(messages[0].content)
-    expect(await prisma.notification.count({
-      where: {
-        tenantId: tenantA,
-        recipientId: reporterId,
-        type: 'FEEDBACK_RESULT',
-        refId: feedback.id,
-      },
-    })).toBe(1)
+    const feedback = await waitForFeedback(id, (item) => item.category === 'IMPROVEMENT'
+      && item.messages.some((m: any) => m.role === 'system' && m.content.includes('已记录')))
+    expect(feedback.status).toBe('CLARIFYING')
+    expect((await inject('reporter', 'GET', `/api/feedback/${id}`)).statusCode).toBe(200)
+    expect((await inject('admin', 'GET', '/api/feedback/admin/inbox')).statusCode).toBe(404)
+    expect((await inject('admin', 'POST', `/api/feedback/${id}/decision`, { action: 'approve' })).statusCode).toBe(404)
+    expect((await inject('admin', 'POST', `/api/feedback/${id}/resolve`, {})).statusCode).toBe(404)
+    expect(await prisma.autoFixRun.count({ where: { feedbackId: id } })).toBe(0)
   })
 
   it('QUESTION 分诊 → CLOSED 闭环', async () => {
@@ -460,16 +198,12 @@ describe('feedback system flow (integration)', () => {
     expect(crossTenant.statusCode).toBe(404)
     const crossTenantMsg = await inject('adminB', 'POST', `/api/feedback/${id}/messages`, { content: 'hi' })
     expect(crossTenantMsg.statusCode).toBe(404)
-    const inboxB = await inject('adminB', 'GET', '/api/feedback/admin/inbox')
-    expect(inboxB.json().find((i: any) => i.id === id)).toBeUndefined()
 
     // 同租户非本人非管理员 → 403
     const otherRead = await inject('other', 'GET', `/api/feedback/${id}`)
     expect(otherRead.statusCode).toBe(403)
     const otherMsg = await inject('other', 'POST', `/api/feedback/${id}/messages`, { content: 'hi' })
     expect(otherMsg.statusCode).toBe(403)
-    const otherDecision = await inject('other', 'POST', `/api/feedback/${id}/decision`, { action: 'approve' })
-    expect(otherDecision.statusCode).toBe(403)
 
     // 本人和管理员可读
     expect((await inject('reporter', 'GET', `/api/feedback/${id}`)).statusCode).toBe(200)

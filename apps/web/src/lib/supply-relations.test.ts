@@ -72,12 +72,12 @@ describe('unbound list helpers', () => {
 })
 
 describe('buildBindItems', () => {
-  it('prefills archive unit, factor and price as quoted price', () => {
+  it('prefills units and conversion but never treats product price as supplier quote', () => {
     const { items, missingConversion } = buildBindItems([productA, productB])
     expect(missingConversion).toEqual([])
     expect(items).toEqual([
-      { productId: 'p1', purchaseUnit: '件', inventoryUnitsPerPurchaseUnit: 6, quotedUnitPrice: 100, isPrimary: false },
-      { productId: 'p2', purchaseUnit: '袋', inventoryUnitsPerPurchaseUnit: 2500, quotedUnitPrice: 50, isPrimary: false },
+      { productId: 'p1', purchaseUnit: '件', inventoryUnitsPerPurchaseUnit: 6, quotedUnitPrice: null, isPrimary: false },
+      { productId: 'p2', purchaseUnit: '袋', inventoryUnitsPerPurchaseUnit: 2500, quotedUnitPrice: null, isPrimary: false },
     ])
   })
 

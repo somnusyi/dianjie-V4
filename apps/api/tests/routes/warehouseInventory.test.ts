@@ -3,11 +3,17 @@ import { Prisma, prisma } from '@dianjie/db'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 vi.mock('../../src/services/warehouseLedger', () => ({
+  serializableWithRetry: vi.fn(async (work: (tx: unknown) => unknown) => work(prisma)),
   recordBatchManualWarehouseInbound: vi.fn(),
   recordBatchManualWarehouseOutbound: vi.fn(),
   recordManualWarehouseInbound: vi.fn(),
   recordWarehousePhysicalCount: vi.fn(),
   reverseManualWarehouseInbound: vi.fn(),
+}))
+const createReviewInbound = vi.hoisted(() => vi.fn())
+vi.mock('../../src/services/warehouseReviewPosting', () => ({
+  createReviewInbound: (...args: any[]) => createReviewInbound(...args),
+  createReviewOutbound: vi.fn(),
 }))
 vi.mock('../../src/services/warehouseLedgerAudit', () => ({
   auditWarehouseLedger: vi.fn(),
@@ -46,6 +52,8 @@ const mocks = vi.hoisted(() => ({
   productCount: vi.fn(),
   balanceFindMany: vi.fn(),
   reservationCount: vi.fn(),
+  replenishmentHoldCount: vi.fn(),
+  upstreamReceiptFindMany: vi.fn(),
 }))
 
 vi.mock('@dianjie/db', async importOriginal => {
@@ -72,6 +80,8 @@ vi.mock('@dianjie/db', async importOriginal => {
     },
     warehouseLedgerBalance: { findMany: (...args: any[]) => mocks.balanceFindMany(...args) },
     warehouseLedgerReservation: { count: (...args: any[]) => mocks.reservationCount(...args) },
+    replenishmentStockHold: { count: (...args: any[]) => mocks.replenishmentHoldCount(...args) },
+    upstreamReceipt: { findMany: (...args: any[]) => mocks.upstreamReceiptFindMany(...args) },
   }
   prismaMock.$queryRaw = (...args: any[]) => mocks.warehouseQueryRaw(...args)
   prismaMock.$transaction = vi.fn(async (work: (tx: any) => unknown) => work(prismaMock))
@@ -135,6 +145,11 @@ describe('warehouse inventory routes', () => {
     assertWarehouseDocumentObjects.mockReset()
     assertWarehouseDocumentObjects.mockResolvedValue(undefined)
     recordInbound.mockReset()
+    createReviewInbound.mockReset()
+    createReviewInbound.mockResolvedValue({
+      created: true,
+      doc: { id: 'doc-1', docNo: 'RK20260802-001', status: 'PENDING_AUDIT', warehouseId: 'warehouse-1', lineCount: 1, totalAmount: 160 },
+    })
     recordInbound.mockResolvedValue({
       replayed: false,
       warehouseId: 'warehouse-1',
@@ -229,6 +244,10 @@ describe('warehouse inventory routes', () => {
     mocks.balanceFindMany.mockResolvedValue([])
     mocks.reservationCount.mockReset()
     mocks.reservationCount.mockResolvedValue(0)
+    mocks.replenishmentHoldCount.mockReset()
+    mocks.replenishmentHoldCount.mockResolvedValue(0)
+    mocks.upstreamReceiptFindMany.mockReset()
+    mocks.upstreamReceiptFindMany.mockResolvedValue([])
     priceHistory.mockReset()
     priceHistory.mockResolvedValue([])
   })
@@ -240,11 +259,11 @@ describe('warehouse inventory routes', () => {
         warehouseLedgerBalances: { some: { tenantId: 'tenant-1', warehouseId: 'warehouse-1' } },
       })
     expect(buildWarehouseInventoryScopeWhere({ tenantId: 'tenant-1', warehouseId: 'warehouse-1', scope: 'bom-mapping' }))
-      .toMatchObject({ tenantId: 'tenant-1', status: 'ENABLED', category: 'BOM待采购映射' })
+      .toMatchObject({ tenantId: 'tenant-1', status: 'ENABLED', category: 'BOM待采购映射', NOT: expect.arrayContaining([{ category: 'BOM待采购映射' }]) })
     expect(buildWarehouseInventoryScopeWhere({ tenantId: 'tenant-1', warehouseId: 'warehouse-1', scope: 'unit-review' }))
       .toMatchObject({
         tenantId: 'tenant-1', status: 'ENABLED', unitConversionStatus: { not: 'VERIFIED' },
-        NOT: { category: 'BOM待采购映射' },
+        NOT: expect.arrayContaining([{ category: 'BOM待采购映射' }]),
       })
   })
 
@@ -261,21 +280,20 @@ describe('warehouse inventory routes', () => {
     })).toBeNull()
   })
 
-  it('records a manual inbound bound to an upstream supplier', async () => {
+  it('submits a manual inbound for review without posting inventory', async () => {
     const app = buildApp({ tenantId: 'tenant-1', userId: 'user-1', role: 'SUPPLY_CHAIN' })
     const response = await app.inject({ method: 'POST', url: '/manual-inbound', payload: body })
 
-    expect(response.statusCode).toBe(200)
-    expect(recordInbound).toHaveBeenCalledWith(expect.objectContaining({
+    expect(response.statusCode, response.body).toBe(200)
+    expect(createReviewInbound).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       tenantId: 'tenant-1',
       userId: 'user-1',
-      productId: 'product-1',
-      purchaseQuantity: 2,
-      totalAmount: 160,
+      items: [expect.objectContaining({ productId: 'product-1', purchaseQuantity: 2, totalAmount: 160 })],
       supplierId: 'sup-1',
       sourceName: '井育苗菇',
     }))
-    expect(response.json()).toMatchObject({ ok: true, replayed: false, gateWarnings: [], movement: { physicalDelta: 16, inventoryUnit: '袋' } })
+    expect(response.json()).toMatchObject({ ok: true, replayed: false, gateWarnings: [], movements: [], doc: { status: 'PENDING_AUDIT' } })
+    expect(recordInbound).not.toHaveBeenCalled()
     await app.close()
   })
 
@@ -287,16 +305,11 @@ describe('warehouse inventory routes', () => {
       mime: 'application/pdf',
       size: 12345,
     }]
-    vi.mocked(ensureWarehouseDoc).mockResolvedValueOnce({
-      doc: { id: 'doc-attachment', docNo: 'RK20260802-002', status: 'POSTED', attachments },
-      created: true,
-    } as any)
     const response = await app.inject({ method: 'POST', url: '/manual-inbound', payload: { ...body, attachments } })
 
     expect(response.statusCode).toBe(200)
-    expect(ensureWarehouseDoc).toHaveBeenCalledWith(expect.objectContaining({
+    expect(createReviewInbound).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       tenantId: 'tenant-1',
-      type: 'MANUAL_INBOUND',
       attachments,
     }))
     expect(assertWarehouseDocumentObjects).toHaveBeenCalledWith('tenant-1', attachments)
@@ -316,6 +329,7 @@ describe('warehouse inventory routes', () => {
     }
     expect(recordInbound).not.toHaveBeenCalled()
     expect(ensureWarehouseDoc).not.toHaveBeenCalled()
+    expect(createReviewInbound).not.toHaveBeenCalled()
     await app.close()
   })
 
@@ -333,6 +347,7 @@ describe('warehouse inventory routes', () => {
     expect(response.json().error).toContain('不存在')
     expect(recordInbound).not.toHaveBeenCalled()
     expect(ensureWarehouseDoc).not.toHaveBeenCalled()
+    expect(createReviewInbound).not.toHaveBeenCalled()
     await app.close()
   })
 
@@ -391,6 +406,7 @@ describe('warehouse inventory routes', () => {
     expect(response.statusCode).toBe(400)
     expect(response.json().error).toContain('供应商')
     expect(recordInbound).not.toHaveBeenCalled()
+    expect(createReviewInbound).not.toHaveBeenCalled()
     await app.close()
   })
 
@@ -401,6 +417,7 @@ describe('warehouse inventory routes', () => {
 
     expect(response.statusCode).toBe(409)
     expect(recordInbound).not.toHaveBeenCalled()
+    expect(createReviewInbound).not.toHaveBeenCalled()
     await app.close()
   })
 
@@ -411,15 +428,13 @@ describe('warehouse inventory routes', () => {
     const response = await app.inject({ method: 'POST', url: '/manual-inbound', payload: body })
 
     expect(response.statusCode).toBe(200)
-    expect(recordInbound).toHaveBeenCalled()
+    expect(createReviewInbound).toHaveBeenCalled()
     expect(response.json().gateWarnings).toEqual(['水牛毛肚（MR001）未绑定该供应商的供货关系'])
-    expect(mocks.opLogCreate).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ entityType: 'WarehouseLedgerMovement' }),
-    }))
+    expect(recordInbound).not.toHaveBeenCalled()
     await app.close()
   })
 
-  it('posts multiple inbound lines as one batch command', async () => {
+  it('submits multiple inbound lines as one review document', async () => {
     const app = buildApp({ tenantId: 'tenant-1', userId: 'user-1', role: 'SUPPLY_CHAIN' })
     const attachments = [{
       key: 'warehouse-docs/tenant-1/batch-delivery-note.pdf',
@@ -427,10 +442,7 @@ describe('warehouse inventory routes', () => {
       mime: 'application/pdf',
       size: 23456,
     }]
-    vi.mocked(ensureWarehouseDoc).mockResolvedValueOnce({
-      doc: { id: 'doc-batch-attachment', docNo: 'RK20260808-002', status: 'POSTED', attachments },
-      created: true,
-    } as any)
+    createReviewInbound.mockResolvedValueOnce({ created: true, doc: { id: 'doc-batch-attachment', docNo: 'RK20260808-002', status: 'PENDING_AUDIT', warehouseId: 'warehouse-1', lineCount: 2, totalAmount: 210 } })
     const response = await app.inject({
       method: 'POST',
       url: '/batch-manual-inbound',
@@ -448,7 +460,7 @@ describe('warehouse inventory routes', () => {
     })
 
     expect(response.statusCode).toBe(200)
-    expect(recordBatchInbound).toHaveBeenCalledWith(expect.objectContaining({
+    expect(createReviewInbound).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       tenantId: 'tenant-1', userId: 'user-1',
       supplierId: 'sup-1',
       sourceName: '井育苗菇',
@@ -457,13 +469,13 @@ describe('warehouse inventory routes', () => {
         expect.objectContaining({ productId: 'product-2', purchaseQuantity: 5, unitPrice: 10 }),
       ],
     }))
-    expect(ensureWarehouseDoc).toHaveBeenCalledWith(expect.objectContaining({
+    expect(createReviewInbound).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({
       tenantId: 'tenant-1',
-      type: 'MANUAL_INBOUND',
       attachments,
     }))
     expect(assertWarehouseDocumentObjects).toHaveBeenCalledWith('tenant-1', attachments)
     expect(response.json()).toMatchObject({ ok: true, count: 2, totalAmount: 210, gateWarnings: [] })
+    expect(recordBatchInbound).not.toHaveBeenCalled()
     expect(JSON.stringify(response.json())).not.toContain(attachments[0].key)
     await app.close()
   })
@@ -486,6 +498,7 @@ describe('warehouse inventory routes', () => {
 
     expect(response.statusCode).toBe(400)
     expect(recordBatchInbound).not.toHaveBeenCalled()
+    expect(createReviewInbound).not.toHaveBeenCalled()
     await app.close()
   })
 
@@ -495,6 +508,7 @@ describe('warehouse inventory routes', () => {
 
     expect(response.statusCode).toBe(403)
     expect(recordInbound).not.toHaveBeenCalled()
+    expect(createReviewInbound).not.toHaveBeenCalled()
     await app.close()
   })
 
@@ -504,6 +518,7 @@ describe('warehouse inventory routes', () => {
 
     expect(response.statusCode).toBe(400)
     expect(recordInbound).not.toHaveBeenCalled()
+    expect(createReviewInbound).not.toHaveBeenCalled()
     await app.close()
   })
 
@@ -543,7 +558,7 @@ describe('warehouse inventory routes', () => {
 
     expect(response.statusCode).toBe(200)
     expect(mocks.movementFindMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ type: { in: ['MANUAL_INBOUND', 'OPENING_BALANCE'] } }),
+      where: expect.objectContaining({ type: { in: ['MANUAL_INBOUND', 'OPENING_BALANCE', 'UPSTREAM_RECEIPT'] } }),
     }))
     await app.close()
   })

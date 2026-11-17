@@ -21,7 +21,7 @@ export default function SupplyChainNavigationPage() {
     { title: '库存管理与验收', items: warehouseTools },
     { title: '库存与盘点单据', items: managementPages.map(page => ({ label: page.title, href: managementHref(page) })) },
     { title: '库存报表', items: inventoryReports.map(report => ({ label: report.title, href: `/v2/supply-chain/reports?report=${report.id}` })) },
-    { title: '财务报表', items: financeReports.map(report => ({ label: report.title, href: `/v2/supply-chain/finance-reports?report=${report.id}` })) },
+    { title: '财务报表', items: [...financeReports.map(report => ({ label: report.title, href: `/v2/supply-chain/finance-reports?report=${report.id}` })), { label: '上游采购月度对账', href: '/v2/supply-chain/finance-reports/settlements' }] },
     { title: '配送查询', items: [
       { label: '门店订货单', href: '/v2/supply-chain/orders' },
       { label: '门店补货单', href: '/v2/supply-chain/replenishment-orders' },

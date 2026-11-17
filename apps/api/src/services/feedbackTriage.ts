@@ -78,38 +78,38 @@ export function parseTriageBlock(raw: string): ParsedAssistantReply {
 
 export interface TriageAction {
   /** 分诊后反馈应进入的状态 */
-  status: 'CLARIFYING' | 'AWAITING_APPROVAL' | 'CLOSED'
+  status: 'CLARIFYING' | 'CLOSED'
   /** 企微通知事件 (fireAndForget), 无则 null */
-  notifyEvent: 'FEEDBACK_URGENT_BUG' | 'FEEDBACK_APPROVAL_PENDING' | null
+  notifyEvent: 'FEEDBACK_URGENT_BUG' | null
   /** 追加一条 system 消息, 让提报人在对话里看到进度 */
   systemNote: string | null
 }
 
 /**
  * 分诊 → 状态流转 + 通知决策 (纯函数, 路由负责落库/发通知)
- * - BUG_BLOCKING: → AWAITING_APPROVAL, 走紧急企微审批通道
- * - IMPROVEMENT / NEW_FEATURE: → AWAITING_APPROVAL, 推审批卡片
+ * - BUG_BLOCKING: 留在反馈对话中，同时发送紧急人工处理提醒
+ * - IMPROVEMENT / NEW_FEATURE: 保留反馈记录和对话，不进入审批
  * - QUESTION: AI 已直接回答 → CLOSED 闭环
  */
 export function decideTriageAction(triage: TriageResult): TriageAction {
   switch (triage.category) {
     case 'BUG_BLOCKING':
       return {
-        status: 'AWAITING_APPROVAL',
+        status: 'CLARIFYING',
         notifyEvent: 'FEEDBACK_URGENT_BUG',
-        systemNote: '该问题已标记为紧急故障并提交管理员审批；批准后系统会自动开发、测试并按安全门禁发布。',
+        systemNote: '该问题已标记为紧急故障并记录，可继续补充情况。',
       }
     case 'IMPROVEMENT':
       return {
-        status: 'AWAITING_APPROVAL',
-        notifyEvent: 'FEEDBACK_APPROVAL_PENDING',
-        systemNote: '已为你整理好改进方案并提交给管理员审批，审批结果会在消息中心通知你。',
+        status: 'CLARIFYING',
+        notifyEvent: null,
+        systemNote: '改进建议已记录，可继续补充说明。',
       }
     case 'NEW_FEATURE':
       return {
-        status: 'AWAITING_APPROVAL',
-        notifyEvent: 'FEEDBACK_APPROVAL_PENDING',
-        systemNote: '已为你整理好需求方案并提交给管理员审批，审批结果会在消息中心通知你。',
+        status: 'CLARIFYING',
+        notifyEvent: null,
+        systemNote: '新需求已记录，可继续补充说明。',
       }
     case 'QUESTION':
       return {

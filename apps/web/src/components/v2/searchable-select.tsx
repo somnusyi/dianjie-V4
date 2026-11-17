@@ -5,6 +5,7 @@ import { Children, Fragment, cloneElement, isValidElement, useId, useRef, useSta
 type Props = SelectHTMLAttributes<HTMLSelectElement> & {
   searchLabel: string
   searchPlaceholder?: string
+  searchInputClassName?: string
   /** Short fixed lists retain their original compact native select. */
   searchWhenLong?: boolean
 }
@@ -33,7 +34,7 @@ export function SearchableList({ children, searchLabel, className = '', listAs: 
 }
 
 /** Filters only the options already authorized and loaded by the caller. Never changes its selection. */
-export function SearchableSelect({ children, searchLabel, searchPlaceholder = '输入名称 / 编号搜索', searchWhenLong = false, ...selectProps }: Props) {
+export function SearchableSelect({ children, searchLabel, searchPlaceholder = '输入名称 / 编号搜索', searchInputClassName = '', searchWhenLong = false, ...selectProps }: Props) {
   const [query, setQuery] = useState('')
   const [searchOpen, setSearchOpen] = useState(false)
   const searchButton = useRef<HTMLButtonElement>(null)
@@ -82,7 +83,7 @@ export function SearchableSelect({ children, searchLabel, searchPlaceholder = '�
         placeholder={searchPlaceholder} value={query} disabled={selectProps.disabled} maxLength={100}
         autoFocus autoComplete="off" style={{ width: '100%' }} onChange={event => setQuery(event.target.value)}
         onKeyDown={event => { if (event.key === 'Enter' && !event.nativeEvent.isComposing) event.preventDefault() }}
-        className="h-9 w-full min-w-0 rounded-cta border border-border bg-white px-3 pr-14 text-caption text-ink outline-none focus:border-accent disabled:bg-bg disabled:opacity-60" />
+        className={`h-9 w-full min-w-0 rounded-cta border border-border bg-white px-3 pr-14 text-caption text-ink outline-none focus:border-accent disabled:bg-bg disabled:opacity-60 ${searchInputClassName}`} />
       {query && <button type="button" disabled={selectProps.disabled} aria-label={`清除${searchLabel}`}
         onClick={() => setQuery('')} className="absolute inset-y-0 right-2 text-caption text-gray2 disabled:opacity-40">清除</button>}
     </span>

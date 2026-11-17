@@ -1,6 +1,7 @@
 import Fastify from 'fastify'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { prisma } from '@dianjie/db'
+import { supplyChainProductScope } from '../../src/lib/supply-chain-product-scope'
 import { inventoryCountRoutes } from '../../src/routes/inventoryCounts'
 import { dailyBusinessImportRoutes } from '../../src/routes/dailyBusinessImports'
 
@@ -206,20 +207,56 @@ describe('store inventory count workflow (integration)', () => {
     expect(await prisma.inventorySnapshot.count({ where: { tenantId, storeId, snapshotDate: new Date('2026-07-10T00:00:00.000Z') } })).toBe(1)
   })
 
-  it('allows supply-chain inventory.read to review an existing count but not write it', async () => {
+  it('separates store-only catalog records from products used by both sides', async () => {
+    const rollback = new Error('rollback product scope fixtures')
+    try {
+      await prisma.$transaction(async tx => {
+        const direct = await tx.supplier.create({
+          data: { tenantId, no: 'SCOPE-DIRECT', name: '门店自采', businessScopes: ['DIRECT_STORE_VENDOR'] },
+        })
+        const createProduct = (code: string, category: string, productSupplierId?: string) => tx.product.create({
+          data: { tenantId, code, name: code, category, supplierId: productSupplierId, unit: '件', price: 1 },
+        })
+        const storeOnly = await createProduct('SCOPE-INV-1', '水吧', supplierId)
+        const bom = await createProduct('SCOPE-BOM', 'BOM待采购映射')
+        const directOnly = await createProduct('SCOPE-DIRECT-ONLY', '其他', direct.id)
+        const shared = await createProduct('SCOPE-SHARED', '水吧', direct.id)
+        await tx.productUpstreamSource.create({
+          data: { tenantId, supplierId, productId: shared.id, purchaseUnit: '件', inventoryUnitsPerPurchaseUnit: 1 },
+        })
+        const snapshot = await tx.inventorySnapshot.findFirstOrThrow({ where: { tenantId, storeId } })
+        await tx.inventorySnapshotItem.create({
+          data: { snapshotId: snapshot.id, productId: storeOnly.id, rawName: storeOnly.name,
+            unit: '件', quantity: 1, unitPrice: 1, amount: 1, sortOrder: 5 },
+        })
+        const visible = await tx.product.findMany({
+          where: { tenantId, ...supplyChainProductScope(tenantId) },
+          select: { id: true },
+        })
+        expect(visible.map(row => row.id).sort()).toEqual([...productIds, shared.id].sort())
+        expect([storeOnly.id, bom.id, directOnly.id].every(id => !visible.some(row => row.id === id))).toBe(true)
+        throw rollback
+      })
+    } catch (error) {
+      if (error !== rollback) throw error
+    }
+  })
+
+  it('rejects supply-chain access to the store count list and detail', async () => {
     const created = await app.inject({ method: 'POST', url: '/api/inventory-counts', payload: { countDate: '2026-07-19' } })
     expect(created.statusCode).toBe(201)
     const count = created.json()
     const detail = await app.inject({ method: 'GET', url: `/api/inventory-counts/${count.id}`, headers: { 'x-test-actor': 'supply-chain' } })
-    expect(detail.statusCode).toBe(200)
-    expect(detail.json().items[0].countedQuantity).toBeNull()
+    expect(detail.statusCode).toBe(403)
+    const list = await app.inject({ method: 'GET', url: '/api/inventory-counts', headers: { 'x-test-actor': 'supply-chain' } })
+    expect(list.statusCode).toBe(403)
     const rejectedWrite = await app.inject({ method: 'POST', url: `/api/inventory-counts/${count.id}/start`, headers: { 'x-test-actor': 'supply-chain' }, payload: { rowVersion: count.rowVersion } })
     expect(rejectedWrite.statusCode).toBe(403)
     const cancelled = await app.inject({ method: 'POST', url: `/api/inventory-counts/${count.id}/cancel`, payload: { rowVersion: count.rowVersion, reason: '只读权限回归清理' } })
     expect(cancelled.statusCode).toBe(200)
   })
 
-  it('keeps supply-chain review tenant-scoped and rejects every count write endpoint', async () => {
+  it('rejects supply-chain access to foreign count detail and every count write endpoint', async () => {
     const created = await app.inject({ method: 'POST', url: '/api/inventory-counts', payload: { countDate: '2026-07-20' } })
     expect(created.statusCode).toBe(201)
     const count = created.json()
@@ -247,7 +284,7 @@ describe('store inventory count workflow (integration)', () => {
         data: { tenantId: foreignTenantId, storeId: foreignStore.id, no: `PD-${foreignSuffix}`, countDate: new Date('2026-07-20T00:00:00.000Z'), createdById: foreignUser.id },
       })
       const forbiddenDetail = await app.inject({ method: 'GET', url: `/api/inventory-counts/${foreignCount.id}`, headers: { 'x-test-actor': 'supply-chain' } })
-      expect(forbiddenDetail.statusCode).toBe(404)
+      expect(forbiddenDetail.statusCode).toBe(403)
     } finally {
       if (foreignTenantId) {
         await prisma.inventoryCountItem.deleteMany({ where: { inventoryCount: { tenantId: foreignTenantId } } })

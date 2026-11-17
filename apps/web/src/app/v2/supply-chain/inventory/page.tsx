@@ -93,7 +93,7 @@ type InventoryResponse = {
   totalPages: number
 }
 
-type InventoryScope = 'stock' | 'bom-mapping' | 'unit-review'
+type InventoryScope = 'stock' | 'unit-review'
 
 type Movement = {
   id: string
@@ -431,7 +431,7 @@ export default function InternalSupplyChainInventoryPage() {
     setQ(saved.q)
     setProductStatus(saved.productStatus)
     setStockStatus(saved.stockStatus)
-    setScope(saved.scope as InventoryScope)
+    setScope(saved.scope === 'unit-review' ? 'unit-review' : 'stock')
   }, [])
 
   useEffect(() => {
@@ -1109,11 +1109,10 @@ export default function InternalSupplyChainInventoryPage() {
       <section className="grid gap-4 2xl:grid-cols-[minmax(0,2fr)_minmax(380px,1fr)]">
         <div className="overflow-hidden rounded-card border border-border bg-white">
           <div className="border-b border-border px-4 py-3">
-            <h2 className="text-h2">{scope === 'stock' ? '库存明细' : scope === 'bom-mapping' ? '待采购映射' : '单位待核验'}</h2>
+            <h2 className="text-h2">{scope === 'stock' ? '库存明细' : '单位待核验'}</h2>
             <p className="text-micro text-gray3">{loading ? '加载中…' : `${visible.length} 个商品`}</p>
             <div className="mt-3 flex flex-wrap gap-2">
               <button onClick={() => setScope('stock')} className={`rounded-full px-3 py-1.5 text-button ${scope === 'stock' ? 'bg-ink text-white' : 'bg-bg text-gray2'}`}>库存商品 {data?.scopeCounts.stockSku ?? '—'}</button>
-              <button onClick={() => setScope('bom-mapping')} className={`rounded-full px-3 py-1.5 text-button ${scope === 'bom-mapping' ? 'bg-ink text-white' : 'bg-bg text-gray2'}`}>待采购映射 {data?.scopeCounts.bomMappingSku ?? '—'}</button>
               <button onClick={() => setScope('unit-review')} className={`rounded-full px-3 py-1.5 text-button ${scope === 'unit-review' ? 'bg-ink text-white' : 'bg-bg text-gray2'}`}>单位待核验 {data?.scopeCounts.unitReviewSku ?? '—'}</button>
             </div>
           </div>
@@ -1139,7 +1138,7 @@ export default function InternalSupplyChainInventoryPage() {
                 {visible.map(item => <tr key={item.id}>
                   <td className="px-4 py-3"><b>{item.name}</b><div className="text-micro text-gray3">{item.code} · {item.category || '未分类'}</div></td>
                   <td className="px-4 py-3"><b>采购：{item.purchaseUnit}</b><div className="text-micro text-gray3">库存：{item.inventoryUnit} · 当前仅为占位单位</div></td>
-                  <td className="px-4 py-3"><b>{scope === 'bom-mapping' ? '关联真实采购 SKU' : '确认采购、库存及换算关系'}</b><div className="text-micro text-red-fg">完成前不进入库存账</div></td>
+                  <td className="px-4 py-3"><b>确认采购、库存及换算关系</b><div className="text-micro text-red-fg">完成前不进入库存账</div></td>
                   <td className="px-4 py-3">
                     {scope === 'unit-review' && item.unitConversionStatus !== 'VERIFIED' && (
                       <button onClick={() => verifyUnitConversion(item)} disabled={verifyingId === item.id}

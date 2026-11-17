@@ -33,8 +33,8 @@ import {
   UPSTREAM_SETTLEMENT_STATUS_LABEL,
 } from '@/lib/upstream-procurement'
 
-type OrderFilters = {dateField: 'createdAt' | 'expectedArrivalAt'; dateFrom: string; dateTo: string; supplierId: string; productQuery: string}
-const EMPTY_ORDER_FILTERS: OrderFilters = {dateField:'createdAt',dateFrom:'',dateTo:'',supplierId:'',productQuery:''}
+type OrderFilters = {dateField: 'createdAt' | 'expectedArrivalAt'; dateFrom: string; dateTo: string; supplierId: string; productQuery: string; status: string}
+const EMPTY_ORDER_FILTERS: OrderFilters = {dateField:'createdAt',dateFrom:'',dateTo:'',supplierId:'',productQuery:'',status:''}
 
 type Tab = 'orders' | 'receipts' | 'returns' | 'claims' | 'settlements' | 'contracts' | 'standards'
 type Supplier = { id: string; no: string; name: string }
@@ -44,6 +44,7 @@ type Source = {
   supplierId: string
   purchaseUnit: string
   quotedUnitPrice: string | number | null
+  lastOrderUnitPrice?: string | number | null
   leadTimeDays?: number
   minOrderQty: string | number
   inventoryUnitsPerPurchaseUnit: string | number
@@ -84,12 +85,13 @@ type Contract = {
   currency: string
   paymentMethod?: string | null
   discrepancyRule?: unknown
-  attachments?: unknown
+  attachments?: Array<{ key?: string; name?: string; url?: string | null }>
   supplier: Supplier
   lines: ContractLine[]
 }
 type OrderLine = {
   id: string
+  productId: string
   productNameSnapshot: string
   productSpecSnapshot?: string | null
   purchaseUnit: string
@@ -110,6 +112,7 @@ type Order = {
   rowVersion?: number
   id: string
   no: string
+  createdAt: string
   status: string
   supplierId: string
   supplier: Supplier
@@ -347,10 +350,10 @@ const TABS: Array<{ key: Tab; label: string }> = [
   { key: 'receipts', label: '到货验收' },
   { key: 'returns', label: '采购退货' },
   { key: 'claims', label: '到货差异' },
-  { key: 'settlements', label: '月度对账' },
-  { key: 'contracts', label: '合同与价格' },
-  { key: 'standards', label: '价格与质量标准' },
 ]
+
+const PROCUREMENT_SEARCH_FIELD = 'h-10 w-full min-w-0 rounded-md border border-[#c9c9c9] bg-white px-3 text-caption text-gray1 shadow-sm outline-none focus:border-[#ff8200] focus:ring-2 focus:ring-[#ff8200]/20'
+const PROCUREMENT_SEARCH_INPUT = 'h-10 rounded-md border-[#c9c9c9] focus:border-[#ff8200] focus:ring-2 focus:ring-[#ff8200]/20'
 
 const RECEIPT_REVIEW_REASON_LABEL: Record<string, string> = {
   AMOUNT_THRESHOLD: '金额达到复核阈值',
@@ -395,8 +398,16 @@ function ActionButton({ children, onClick, disabled, tone = 'dark' }: { children
 export default function UpstreamProcurementPage() {
   const [tab, setTab] = useState<Tab>('orders')
   useEffect(() => {
-    const requested = new URLSearchParams(window.location.search).get('tab') as Tab | null
-    if (TABS.some(item => item.key === requested)) setTab(requested!)
+    const query = new URLSearchParams(window.location.search)
+    const path = window.location.pathname
+    const requested = (path.endsWith('/finance-reports/settlements') ? 'settlements' : path.endsWith('/suppliers/contracts') ? 'contracts' : query.get('tab')) as Tab | null
+    if (requested && (TABS.some(item => item.key === requested) || requested === 'settlements' || requested === 'contracts')) setTab(requested)
+    if ((!requested || requested === 'orders') && query.get('view') !== 'history') setShowOrderForm(true)
+    if (requested === 'contracts' && query.get('supplierId')) {
+      setArchiveSupplierId(query.get('supplierId')!)
+      setContractSupplierId(query.get('supplierId')!)
+      if (query.get('new') === '1') setShowContractForm(true)
+    }
   }, [])
   const [loading, setLoading] = useState(true)
   const [working, setWorking] = useState<string | null>(null)
@@ -413,7 +424,6 @@ export default function UpstreamProcurementPage() {
   const [orderFilters, setOrderFilters] = useState<OrderFilters>(EMPTY_ORDER_FILTERS)
   const [orderPage, setOrderPage] = useState(1)
   const [orderTotal, setOrderTotal] = useState(0)
-  const [pendingCounts, setPendingCounts] = useState({ pendingOrders: 0, pendingReceipts: 0, pendingClaims: 0 })
   const orderListRequestRef = useRef(0)
   const loadAllRequestRef = useRef(0)
   const [shipments, setShipments] = useState<Shipment[]>([])
@@ -423,6 +433,7 @@ export default function UpstreamProcurementPage() {
   const [statements, setStatements] = useState<Statement[]>([])
   const [settlementListReady, setSettlementListReady] = useState(false)
   const [contracts, setContracts] = useState<Contract[]>([])
+  const [archiveSupplierId, setArchiveSupplierId] = useState('')
   const [qualityStandards, setQualityStandards] = useState<QualityStandard[]>([])
   const [priceStandards, setPriceStandards] = useState<PriceStandard[]>([])
   const [suppliers, setSuppliers] = useState<Supplier[]>([])
@@ -446,13 +457,23 @@ export default function UpstreamProcurementPage() {
     title: '',
     startsAt: shanghaiBusinessDate(),
   })
+  const [contractFiles, setContractFiles] = useState<File[]>([])
+  const [contractUploadedFiles, setContractUploadedFiles] = useState<Array<{ key: string; name: string; mime: string; size: number }>>([])
   const [sourcePrices, setSourcePrices] = useState<Record<string, string>>({})
   const [orderSupplierId, setOrderSupplierId] = useState('')
-  const [orderContractId, setOrderContractId] = useState('')
   const [orderWarehouseId, setOrderWarehouseId] = useState('')
   const [orderArrival, setOrderArrival] = useState('')
+  const [orderNote, setOrderNote] = useState('')
   const [orderQuantities, setOrderQuantities] = useState<Record<string, string>>({})
+  const [orderPrices, setOrderPrices] = useState<Record<string, string>>({})
+  const [orderSources, setOrderSources] = useState<Source[]>([])
   const [orderProductQuery, setOrderProductQuery] = useState('')
+  const [orderProductPickerOpen, setOrderProductPickerOpen] = useState(false)
+  const [orderHistory, setOrderHistory] = useState<Order[]>([])
+  const [orderHistoryId, setOrderHistoryId] = useState('')
+  const [orderHistoryLoading, setOrderHistoryLoading] = useState(false)
+  const [orderHistoryError, setOrderHistoryError] = useState(false)
+  const [pendingHistoryId, setPendingHistoryId] = useState('')
   const [claimingReceipt, setClaimingReceipt] = useState<ReceiptDetail | null>(null)
   const [postClaimType, setPostClaimType] = useState<'SHORTAGE' | 'POST_RECEIPT_DAMAGE'>('POST_RECEIPT_DAMAGE')
   const [postClaimDescription, setPostClaimDescription] = useState('')
@@ -460,6 +481,7 @@ export default function UpstreamProcurementPage() {
   const [postClaimEvidence, setPostClaimEvidence] = useState<Array<{ url: string; name: string }>>([])
   const [uploadingEvidence, setUploadingEvidence] = useState(false)
   const [viewingOrder, setViewingOrder] = useState<Order | null>(null)
+  const viewingOrderShipments = viewingOrder ? shipments.filter(shipment => shipment.purchaseOrder.id === viewingOrder.id) : []
   const [reviewingRevisionOrder, setReviewingRevisionOrder] = useState<Order | null>(null)
   const [viewingReceipt, setViewingReceipt] = useState<ReceiptDetail | null>(null)
   const [receiptReviewAction, setReceiptReviewAction] = useState<'confirm' | 'review' | null>(null)
@@ -476,6 +498,7 @@ export default function UpstreamProcurementPage() {
   const qualityStandardRequestKeyRef = useRef(clientRequestId())
   const priceStandardRequestKeyRef = useRef(clientRequestId())
   const sourceRequestRef = useRef(0)
+  const orderSourceRequestRef = useRef(0)
   const month = useMemo(() => currentMonthRange(), [])
   const [settlementForm, setSettlementForm] = useState({
     supplierId: '',
@@ -524,12 +547,11 @@ export default function UpstreamProcurementPage() {
   const loadOrders = useCallback(async () => {
     const request = ++orderListRequestRef.current
     const query = new URLSearchParams({paginated:'true', page:String(orderPage), pageSize:'20', dateField:orderFilters.dateField})
-    for (const key of ['dateFrom','dateTo','supplierId','productQuery'] as const) if (orderFilters[key].trim()) query.set(key, orderFilters[key].trim())
+    for (const key of ['dateFrom','dateTo','supplierId','productQuery','status'] as const) if (orderFilters[key].trim()) query.set(key, orderFilters[key].trim())
     const result = await apiFetch<{items:Order[];total:number;summary:{pendingOrders:number;pendingReceipts:number;pendingClaims:number}}>(`/api/upstream/purchase-orders?${query}`)
     if (request !== orderListRequestRef.current) return
     setOrders(result.items)
     setOrderTotal(result.total)
-    setPendingCounts(result.summary)
     if (orderPage > 1 && orderPage > Math.max(1, Math.ceil(result.total / 20))) setOrderPage(Math.max(1, Math.ceil(result.total / 20)))
   }, [orderPage, orderFilters])
 
@@ -564,7 +586,6 @@ export default function UpstreamProcurementPage() {
       setSuppliers(setup.suppliers)
       setWarehouses(setup.warehouses)
       setOrderWarehouseId((value) => value || setup.warehouses[0]?.id || '')
-      setOrderSupplierId((value) => value || setup.suppliers[0]?.id || '')
       setSettlementForm((value) => ({
         ...value,
         supplierId: value.supplierId || setup.suppliers[0]?.id || '',
@@ -573,7 +594,6 @@ export default function UpstreamProcurementPage() {
       if (request !== loadAllRequestRef.current) return
       setOrders([])
       setOrderTotal(0)
-      setPendingCounts({ pendingOrders: 0, pendingReceipts: 0, pendingClaims: 0 })
       setError(reason?.message || '上游采购数据加载失败')
     } finally {
       if (request === loadAllRequestRef.current) setLoading(false)
@@ -861,7 +881,7 @@ export default function UpstreamProcurementPage() {
   function confirmContractActivation(contract: Pick<Contract, 'id' | 'contractNo' | 'title'>) {
     openRevisionRejectConfirm({
       title: '确认启用合同？',
-      body: `${contract.contractNo} · ${contract.title}\n请确认合同价格和单位换算无误。`,
+      body: `${contract.contractNo} · ${contract.title}\n合同启用后作为供应商档案保存。`,
       confirmLabel: '启用合同',
       tone: 'primary',
       onConfirm: async () => {
@@ -881,27 +901,25 @@ export default function UpstreamProcurementPage() {
   async function createContract() {
     if(contractCopyRecoveryBlocked){setError('请先核对浏览器保留的合同创建记录，不能另建合同');return}
     if (contractCopy) return createContractCopy()
-    // 填了但无效 (负数/非数字) 的单价不能静默丢弃, 必须点名提示
-    const invalidPriced = sources.filter((source) => {
-      const raw = (sourcePrices[source.id] || '').trim()
-      return raw !== '' && !validContractPrice(raw)
-    })
-    if (invalidPriced.length > 0) {
-      setError(`以下商品的单价无效，未纳入合同：${invalidPriced.map((source) => source.product.name).join('、')}。请填写大于 0、最多六位小数的价格，或清空后重试。`)
+    if (!contractSupplierId || !contractForm.contractNo.trim() || !contractForm.title.trim()) {
+      setError('请填写供应商、合同编号和名称')
       return
     }
-    const lines = sources
-      .filter((source) => Number(sourcePrices[source.id]) > 0)
-      .map((source) => ({
-        upstreamSourceId: source.id,
-        unitPrice: Number(sourcePrices[source.id]),
-        packageMultiple: 1,
-        shortTolerancePct: 0,
-        overTolerancePct: 0,
-      }))
-    if (!contractSupplierId || !contractForm.contractNo.trim() || !contractForm.title.trim() || lines.length === 0) {
-      setError('请填写合同编号、名称，并为至少一个商品填写有效单价')
-      return
+    let attachments = contractUploadedFiles
+    if (contractFiles.length && attachments.length !== contractFiles.length) {
+      try {
+        attachments = []
+        for (const file of contractFiles) {
+          const form = new FormData()
+          form.append('file', file, file.name)
+          const uploaded = await apiFetch<{ key: string; name: string; mime: string; size: number }>('/api/upload?category=supplier-archive-general', { method: 'POST', body: form })
+          attachments.push({ key: uploaded.key, name: uploaded.name, mime: uploaded.mime, size: uploaded.size })
+        }
+        setContractUploadedFiles(attachments)
+      } catch (reason: any) {
+        setError(reason?.message || '合同附件上传失败')
+        return
+      }
     }
     const succeeded = await run(
       'create-contract',
@@ -918,7 +936,8 @@ export default function UpstreamProcurementPage() {
             taxInclusive: true,
             currency: 'CNY',
             idempotencyKey: contractRequestKeyRef.current,
-            lines,
+            attachments,
+            lines: [],
           }),
         }),
       '合同草稿已创建，可直接启用',
@@ -944,38 +963,90 @@ export default function UpstreamProcurementPage() {
     if (succeeded) {
       setShowContractForm(false)
       setQuickContractFromOrder(false)
+      setContractFiles([])
+      setContractUploadedFiles([])
     }
   }
 
-  const activeContracts = useMemo(() => contracts.filter((contract) => contract.status === 'ACTIVE'), [contracts])
-  const supplierActiveContracts = useMemo(() => activeContracts.filter((contract) => contract.supplierId === orderSupplierId), [activeContracts, orderSupplierId])
-  const selectedOrderContract = supplierActiveContracts.find((contract) => contract.id === orderContractId)
+  async function selectOrderSupplier(id: string) {
+    const requestId = ++orderSourceRequestRef.current
+    setOrderSupplierId(id)
+    setOrderSources([])
+    setOrderQuantities({})
+    setOrderPrices({})
+    setOrderProductQuery('')
+    setOrderProductPickerOpen(false)
+    setOrderHistory([])
+    setOrderHistoryId('')
+    setOrderHistoryError(false)
+    setPendingHistoryId('')
+    if (!id) return
+    try {
+      const setup = await apiFetch<{ sources: Source[] }>(`/api/upstream/setup-options?supplierId=${encodeURIComponent(id)}`)
+      if (requestId === orderSourceRequestRef.current) setOrderSources(setup.sources)
+      await reloadOrderHistory(id, requestId)
+    } catch (reason: any) {
+      if (requestId === orderSourceRequestRef.current) setError(reason?.message || '采购商品加载失败')
+    }
+  }
 
-  useEffect(() => {
-    if (!showOrderForm) return
-    if (supplierActiveContracts.length === 1) {
-      if (orderContractId !== supplierActiveContracts[0].id) selectOrderContract(supplierActiveContracts[0].id)
+  async function reloadOrderHistory(id: string, requestId = orderSourceRequestRef.current) {
+    setOrderHistoryLoading(true)
+    setOrderHistoryError(false)
+    try {
+      const history = await apiFetch<{ items: Order[] }>(`/api/upstream/purchase-orders?paginated=true&page=1&pageSize=20&supplierId=${encodeURIComponent(id)}`)
+      if (requestId === orderSourceRequestRef.current) setOrderHistory(history.items.filter(order => order.status !== 'CANCELLED'))
+    } catch {
+      if (requestId === orderSourceRequestRef.current) setOrderHistoryError(true)
+    } finally {
+      if (requestId === orderSourceRequestRef.current) setOrderHistoryLoading(false)
+    }
+  }
+
+  function addOrderProduct(source: Source) {
+    setOrderQuantities(current => Object.hasOwn(current, source.id) ? current : {
+      ...current, [source.id]: String(source.minOrderQty || 1),
+    })
+    const previousPrice = source.lastOrderUnitPrice ?? source.quotedUnitPrice
+    if (previousPrice != null && Number(previousPrice) > 0) {
+      setOrderPrices(current => Object.hasOwn(current, source.id) ? current : { ...current, [source.id]: String(previousPrice) })
+    }
+    setOrderProductQuery('')
+  }
+
+  async function fillOrderFromHistory(id: string, replaceConfirmed = false) {
+    if (id && !replaceConfirmed && Object.keys(orderQuantities).length > 0) {
+      setPendingHistoryId(id)
       return
     }
-    if (!supplierActiveContracts.some((contract) => contract.id === orderContractId)) {
-      setOrderContractId('')
-      setOrderQuantities({})
+    setPendingHistoryId('')
+    const requestId = orderSourceRequestRef.current
+    setOrderHistoryId(id)
+    if (!id) return
+    setOrderHistoryLoading(true)
+    setError(null)
+    try {
+      const historical = await apiFetch<Order>(`/api/upstream/purchase-orders/${encodeURIComponent(id)}`)
+      if (requestId !== orderSourceRequestRef.current) return
+      if (historical.supplierId !== orderSupplierId) throw new Error('历史采购单不属于当前供应商')
+      const quantities: Record<string, string> = {}
+      const prices: Record<string, string> = {}
+      let missing = 0
+      for (const line of historical.lines || []) {
+        const source = orderSources.find(item => item.product.id === line.productId && item.purchaseUnit === line.purchaseUnit)
+        if (!source) { missing++; continue }
+        quantities[source.id] = String(line.orderedQty)
+        prices[source.id] = String(line.unitPrice)
+      }
+      setOrderQuantities(quantities)
+      setOrderPrices(prices)
+      if (warehouses.some(warehouse => warehouse.id === historical.warehouse.id)) setOrderWarehouseId(historical.warehouse.id)
+      setNotice(missing ? `已带入 ${Object.keys(quantities).length} 项；${missing} 项已不在该供应商当前供货范围` : `已带入采购单 ${historical.no} 的商品、数量和单价`)
+    } catch (reason: any) {
+      setError(reason?.message || '历史采购单加载失败')
+    } finally {
+      setOrderHistoryLoading(false)
     }
-  }, [showOrderForm, supplierActiveContracts, orderContractId])
-
-  function selectOrderContract(id: string) {
-    setOrderContractId(id)
-    setOrderQuantities({})
-    setOrderProductQuery('')
-  }
-
-  function addOrderProduct(line: ContractLine) {
-    const minimum = Math.max(Number(line.minOrderQty || 1), Number(line.packageMultiple || 1))
-    const multiple = Math.max(Number(line.packageMultiple || 1), 0.000001)
-    setOrderQuantities(current => Object.hasOwn(current, line.id) ? current : {
-      ...current, [line.id]: String(Math.ceil(minimum / multiple) * multiple),
-    })
-    setOrderProductQuery('')
   }
 
   async function openQuickContract() {
@@ -996,38 +1067,45 @@ export default function UpstreamProcurementPage() {
 
   function openNewOrderForm() {
     setOrderQuantities({})
+    setOrderPrices({})
     setOrderProductQuery('')
+    setOrderNote('')
+    setOrderHistoryId('')
+    setOrderProductPickerOpen(false)
     setShowOrderForm(true)
     setTab('orders')
   }
 
-  async function createOrder() {
-    if (!selectedOrderContract || !orderWarehouseId) return setError('请选择已生效合同和收货总仓')
-    const lines = selectedOrderContract.lines
-      .filter((line) => Number(orderQuantities[line.id]) > 0)
-      .map((line) => ({
-        contractLineId: line.id,
-        quantity: Number(orderQuantities[line.id]),
+  async function createOrder(sendToSupplier = false) {
+    if (!orderSupplierId || !orderWarehouseId) return setError('请选择供应商和收货总仓')
+    const lines = orderSources
+      .filter(source => Object.hasOwn(orderQuantities, source.id))
+      .map(source => ({
+        upstreamSourceId: source.id,
+        quantity: Number(orderQuantities[source.id]),
+        unitPrice: Number(orderPrices[source.id]),
       }))
     if (!lines.length) return setError('至少填写一个商品的采购数量')
+    if (lines.some(line => !Number.isFinite(line.quantity) || line.quantity <= 0 || !Number.isFinite(line.unitPrice) || line.unitPrice <= 0)) return setError('请填写每个商品的采购数量和本单单价')
     const succeeded = await run(
       'create-order',
-      () =>
-        apiFetch<Pick<Order, 'id'>>('/api/upstream/purchase-orders', {
+      async () => {
+        const created = await apiFetch<Pick<Order, 'id'>>('/api/upstream/purchase-orders/direct', {
           method: 'POST',
           body: JSON.stringify({
-            supplierId: selectedOrderContract.supplierId,
+            supplierId: orderSupplierId,
             warehouseId: orderWarehouseId,
-            contractId: selectedOrderContract.id,
             expectedArrivalAt: orderArrival || undefined,
-            origin: 'MANUAL',
+            note: orderNote.trim() || undefined,
             idempotencyKey: orderRequestKeyRef.current,
+            sendToSupplier,
             lines,
           }),
-        }),
-      '采购单草稿已创建',
+        })
+        return created
+      },
+      sendToSupplier ? '采购单已发送供应商' : '采购单草稿已创建',
       async (created) => {
-        focusRecord('orders', `order-${created.id}`)
         await openOrderDetail(created)
         setNoticeAction({
           label: '查看采购单',
@@ -1037,7 +1115,10 @@ export default function UpstreamProcurementPage() {
     )
     if (succeeded) {
       orderRequestKeyRef.current = clientRequestId()
-      setShowOrderForm(false)
+      setOrderQuantities({})
+      setOrderPrices({})
+      setOrderHistoryId('')
+      setOrderNote('')
     }
   }
 
@@ -1336,8 +1417,6 @@ export default function UpstreamProcurementPage() {
     })
   }
 
-  const { pendingOrders: pendingOrderCount, pendingReceipts: pendingReceiptCount, pendingClaims: pendingClaimCount } = pendingCounts
-
   return (
     <div className="min-h-screen bg-bg px-4 py-5 lg:px-8 lg:py-7">
       <style jsx global>{`
@@ -1368,23 +1447,14 @@ export default function UpstreamProcurementPage() {
       <header className="mx-auto max-w-[1440px] border-b border-border pb-5">
         <div className="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
           <div>
-            <h1 className="text-h1">上游采购与供应商协同</h1>
+            <h1 className="text-h1">{showOrderForm ? '发起采购单' : tab === 'receipts' ? '到货验收' : tab === 'returns' ? '采购退货' : tab === 'claims' ? '到货差异' : tab === 'settlements' ? '上游采购月度对账' : tab === 'contracts' ? '供应商合同档案' : '上游采购'}</h1>
           </div>
-          <div className="flex gap-2">
-            <ActionButton tone="light" onClick={() => void loadAll()} disabled={loading}>
+          <div className="flex gap-2 pr-28">
+            {!showOrderForm && <ActionButton tone="light" onClick={() => void loadAll()} disabled={loading}>
               刷新
-            </ActionButton>
-            <ActionButton
-              onClick={openNewOrderForm}
-            >
-              新建采购单
-            </ActionButton>
+            </ActionButton>}
+            {!showOrderForm && tab === 'orders' && <ActionButton onClick={openNewOrderForm}>发起采购单</ActionButton>}
           </div>
-        </div>
-        <div className="mt-5 grid gap-3 sm:grid-cols-3">
-          <Summary label="进行中采购" value={pendingOrderCount} />
-          <Summary label="待验收入库" value={pendingReceiptCount} danger={pendingReceiptCount > 0} />
-          <Summary label="待处理差异" value={pendingClaimCount} danger={pendingClaimCount > 0} />
         </div>
       </header>
 
@@ -1400,17 +1470,17 @@ export default function UpstreamProcurementPage() {
             )}
           </div>
         )}
-        <div className="mb-5 flex gap-2 overflow-x-auto">
+        {tab !== 'settlements' && tab !== 'contracts' && <div className="mb-5 flex gap-2 overflow-x-auto">
           {TABS.map((item) => (
             <button
               key={item.key}
-              onClick={() => setTab(item.key)}
+              onClick={() => item.key === 'orders' ? openNewOrderForm() : (setShowOrderForm(false), setTab(item.key))}
               className={`whitespace-nowrap rounded-full px-4 py-2 text-button ${tab === item.key ? 'bg-gray1 text-white' : 'border border-border bg-white text-gray2'}`}
             >
               {item.label}
             </button>
           ))}
-        </div>
+        </div>}
 
         {viewingPurchaseReturn && (
           <div className="mb-4">
@@ -1466,7 +1536,11 @@ export default function UpstreamProcurementPage() {
               <div className="mt-4 rounded-xl border border-border p-3">
                 <p className="mb-3 text-caption text-gray2">审核只改变进度；另一名供应链人员复审后才出库。</p>
                 <ProcurementProgressActions kind="RETURN" row={viewingPurchaseReturn} role={getUser()?.role || ''} busy={Boolean(working)} onAction={action => confirmProcurementProgress('RETURN', viewingPurchaseReturn, action)} />
-              <LegacyQualityImagesButton kind="RETURN" sourceId={viewingPurchaseReturn.id} />
+                {viewingPurchaseReturn.status === 'APPROVED' && <ActionButton onClick={() => openActionConfirm({
+                  title: `登记退货单 ${viewingPurchaseReturn.no} 实际收货`, body: '仅在供应商已实际收到退货货物后确认。', confirmLabel: '确认已收货', tone: 'primary',
+                  onConfirm: async () => { await run(`receive-return-${viewingPurchaseReturn.id}`, () => apiFetch(`/api/upstream/purchase-returns/${viewingPurchaseReturn.id}/receive`, { method: 'POST', body: '{}' }), '已登记供应商实际收货', undefined, true) },
+                })} disabled={working === `receive-return-${viewingPurchaseReturn.id}`}>登记供应商实收</ActionButton>}
+                <LegacyQualityImagesButton kind="RETURN" sourceId={viewingPurchaseReturn.id} />
               </div>
             </Panel>
           </div>
@@ -1528,6 +1602,27 @@ export default function UpstreamProcurementPage() {
                     })}
                   </tbody>
                 </table>
+              </div>
+              <div className="mt-4 border-t border-border pt-4">
+                <h2 className="text-h3">发货批次</h2>
+                <div className="mt-3 space-y-2">
+                  {viewingOrderShipments.length === 0 ? (
+                    <p className="text-caption text-gray3">暂无发货单</p>
+                  ) : (
+                    viewingOrderShipments.map((shipment) => (
+                      <div key={shipment.id} className="flex flex-col gap-2 rounded-xl bg-bg p-3 sm:flex-row sm:items-center sm:justify-between">
+                        <div>
+                          <b>{shipment.no}</b>
+                          <p className="text-caption text-gray2">
+                            {shipment.lines.length} 项 · {UPSTREAM_ORDER_STATUS_LABEL[shipment.status] || shipment.status}
+                          </p>
+                        </div>
+                        <div className="overflow-x-auto"><table className="text-caption"><thead><tr><th className="p-2">商品</th><th className="p-2">数量 / 单位</th><th className="p-2">质检</th></tr></thead><tbody>{shipment.lines.map(line=><tr key={line.id}><td className="p-2">{line.purchaseOrderLine.productNameSnapshot}</td><td className="p-2">{line.shippedQty} {line.purchaseUnit}</td><td className="p-2"><DocumentQualityImageButton kind="BATCH" sourceId={`S:${line.id}`}/></td></tr>)}</tbody></table></div>
+                        {['SHIPPED', 'PARTIALLY_RECEIVED'].includes(shipment.status) && !shipmentFullyInspected(shipment) && <a className="rounded-lg border border-accent px-3 py-2 text-accent" href={`/v2/supply-chain/procurement/receipts/new?shipment=${encodeURIComponent(shipment.id)}`}>登记到货</a>}
+                      </div>
+                    ))
+                  )}
+                </div>
               </div>
             </Panel>
           </div>
@@ -1646,7 +1741,12 @@ export default function UpstreamProcurementPage() {
               <div className="mt-4 rounded-xl border border-border p-3">
                 <p className="mb-3 text-caption text-gray2">提交、审核不改变库存，复审后才生效；超标准价不能验收入库。</p>
                 <ProcurementProgressActions kind="RECEIPT" row={viewingReceipt} role={getUser()?.role || ''} busy={Boolean(working)} onAction={action => confirmProcurementProgress('RECEIPT', viewingReceipt, action)} />
-              <LegacyQualityImagesButton kind="RECEIPT" sourceId={viewingReceipt.id} />
+                <a href={`/v2/supply-chain/suppliers/${encodeURIComponent(viewingReceipt.supplier.id)}/evidence?receiptId=${encodeURIComponent(viewingReceipt.id)}`} className="mt-3 inline-block text-caption text-accent underline">{viewingReceipt.status === 'POSTED' ? '查看来货证明' : '维护来货证明'}</a>
+                {viewingReceipt.status === 'POSTED' && <div className="mt-3 flex flex-wrap items-center gap-2">
+                  <ActionButton tone="light" onClick={() => void openPostReceiptClaim(viewingReceipt)}>收货后补报异常</ActionButton>
+                  {viewingReceipt._count.claims === 0 && <ActionButton tone="danger" onClick={() => void reverseReceipt(viewingReceipt)} disabled={working === `reverse-${viewingReceipt.id}`}>冲销收货</ActionButton>}
+                </div>}
+                <LegacyQualityImagesButton kind="RECEIPT" sourceId={viewingReceipt.id} />
               </div>
             </Panel>
           </div>
@@ -1728,104 +1828,71 @@ export default function UpstreamProcurementPage() {
                 )
               })()}
             {showOrderForm && (
-              <Panel
-                title="新建采购单"
-                onClose={() => {
-                  setShowOrderForm(false)
-                  setQuickContractFromOrder(false)
-                }}
-              >
-                <div className="grid gap-3 md:grid-cols-4">
-                  <Field label="供应商">
-                    <SearchableSelect searchLabel="搜索采购供应商"
-                      value={orderSupplierId}
-                      onChange={(event) => {
-                        setOrderSupplierId(event.target.value)
-                        setOrderContractId('')
-                        setOrderQuantities({})
-                        setOrderProductQuery('')
-                        setQuickContractFromOrder(false)
-                      }}
-                      className="input"
-                    >
-                      <option value="">请选择</option>
-                      {suppliers.map((supplier) => (
-                        <option key={supplier.id} value={supplier.id}>
-                          {supplier.no} · {supplier.name}
-                        </option>
-                      ))}
-                    </SearchableSelect>
-                  </Field>
-                  {supplierActiveContracts.length > 1 ? (
-                    <Field label="已生效合同（多份请选）">
-                      <SearchableSelect searchWhenLong searchLabel="搜索合同" value={orderContractId} onChange={(event) => selectOrderContract(event.target.value)} className="input">
-                        <option value="">请选择</option>
-                        {supplierActiveContracts.map((contract) => (
-                          <option key={contract.id} value={contract.id}>
-                            {contract.contractNo} · {contract.title}
-                          </option>
-                        ))}
+              <section className="overflow-hidden rounded-xl border border-border bg-white" aria-label="发起采购单">
+                <div className="border-b border-border px-4 py-4 lg:px-5">
+                  <div className="grid max-w-[1100px] gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                    <Field label="供应商">
+                      <SearchableSelect searchWhenLong searchLabel="搜索采购供应商" searchInputClassName={PROCUREMENT_SEARCH_INPUT} aria-label="采购供应商" value={orderSupplierId} onChange={event => void selectOrderSupplier(event.target.value)} className={PROCUREMENT_SEARCH_FIELD}>
+                        <option value="">请选择供应商</option>
+                        {suppliers.map(supplier => <option key={supplier.id} value={supplier.id}>{supplier.no} · {supplier.name}</option>)}
                       </SearchableSelect>
                     </Field>
-                  ) : supplierActiveContracts.length === 1 ? (
-                    <Field label="已自动带出合同">
-                      <div className="input bg-bg">
-                        <b>{supplierActiveContracts[0].contractNo}</b> · {supplierActiveContracts[0].title}
-                      </div>
+                    <Field label="收货总仓">
+                      <SearchableSelect searchWhenLong searchLabel="搜索收货总仓" searchInputClassName={PROCUREMENT_SEARCH_INPUT} aria-label="收货总仓" value={orderWarehouseId} onChange={event => setOrderWarehouseId(event.target.value)} className={PROCUREMENT_SEARCH_FIELD}>
+                        <option value="">请选择收货总仓</option>
+                        {warehouses.map(warehouse => <option key={warehouse.id} value={warehouse.id}>{warehouse.name}</option>)}
+                      </SearchableSelect>
                     </Field>
-                  ) : (
-                    <div className="rounded-xl border border-amber/30 bg-amber/10 p-3 text-caption">
-                      <b>该供应商暂无生效合同</b>
-                      <button type="button" onClick={() => void openQuickContract()} className="mt-1 block text-button text-accent underline">
-                        快速建合同
-                      </button>
-                    </div>
-                  )}
-                  <Field label="收货总仓">
-                    <SearchableSelect searchWhenLong searchLabel="搜索收货总仓" value={orderWarehouseId} onChange={(event) => setOrderWarehouseId(event.target.value)} className="input">
-                      <option value="">请选择</option>
-                      {warehouses.map((warehouse) => (
-                        <option key={warehouse.id} value={warehouse.id}>
-                          {warehouse.name}
-                        </option>
-                      ))}
-                    </SearchableSelect>
-                  </Field>
-                  <Field label="期望到货日">
-                    <input type="date" value={orderArrival} onChange={(event) => setOrderArrival(event.target.value)} className="input" />
-                  </Field>
+                    <Field label="期望到货日"><input type="date" value={orderArrival} onChange={event => setOrderArrival(event.target.value)} className={PROCUREMENT_SEARCH_FIELD} /></Field>
+                  </div>
+                  <div className="mt-4 max-w-[354px]"><Field label="带入历史采购单"><select className={PROCUREMENT_SEARCH_FIELD} aria-label="选择历史采购单" value={orderHistoryId} disabled={!orderSupplierId || orderHistoryLoading || orderHistoryError || orderHistory.length === 0} onChange={event => void fillOrderFromHistory(event.target.value)}><option value="">{!orderSupplierId ? '请先选择供应商' : orderHistoryLoading ? '加载中…' : orderHistoryError ? '历史订单加载失败' : orderHistory.length === 0 ? '暂无历史订单' : '不带入'}</option>{orderHistory.map(order => <option key={order.id} value={order.id}>{order.no} · {order.createdAt ? shortDate(order.createdAt) : '—'} · {order._count?.lines || 0} 项</option>)}</select></Field>{orderHistoryError && <button type="button" className="mt-2 text-button text-accent" onClick={() => void reloadOrderHistory(orderSupplierId)}>重试加载</button>}{pendingHistoryId && <div className="mt-2 flex items-center gap-3 text-caption"><span>带入后将替换当前商品和单价</span><button type="button" className="text-accent" onClick={() => void fillOrderFromHistory(pendingHistoryId, true)}>继续带入</button><button type="button" onClick={() => setPendingHistoryId('')}>取消</button></div>}</div>
                 </div>
-                {selectedOrderContract && (
-                  <section className="mt-4 space-y-3" aria-label="采购商品选择">
-                    <input type="search" aria-label="搜索采购商品" placeholder="搜索商品名称、编码或规格，点击添加" className="input" value={orderProductQuery} onChange={event => setOrderProductQuery(event.target.value)} />
-                    {orderProductQuery.trim() && <div className="max-h-64 overflow-auto rounded-xl border border-border" aria-label="采购商品搜索结果">
-                      {selectedOrderContract.lines.filter(line => `${line.productNameSnapshot} ${line.productCodeSnapshot} ${line.productSpecSnapshot || ''}`.toLowerCase().includes(orderProductQuery.trim().toLowerCase())).slice(0, 30).map(line => <div key={line.id} className="flex items-center justify-between gap-3 border-b border-border p-3">
-                        <div><b>{line.productNameSnapshot}</b><div className="text-gray3">{line.productCodeSnapshot} · {line.productSpecSnapshot || '—'} · {unitPriceMoney(line.unitPrice)} / {line.purchaseUnit}</div></div>
-                        <button type="button" aria-label={`添加采购商品 ${line.productNameSnapshot}`} disabled={Object.hasOwn(orderQuantities, line.id)} onClick={() => addOrderProduct(line)} className="shrink-0 rounded-lg border border-border px-3 py-2 disabled:opacity-40">{Object.hasOwn(orderQuantities, line.id) ? '已添加' : '添加'}</button>
-                      </div>)}
-                      {!selectedOrderContract.lines.some(line => `${line.productNameSnapshot} ${line.productCodeSnapshot} ${line.productSpecSnapshot || ''}`.toLowerCase().includes(orderProductQuery.trim().toLowerCase())) && <p className="p-3 text-gray3">该合同没有符合条件的商品</p>}
-                      <p className="p-2 text-micro text-gray3">每次显示前30项，可继续输入名称或编码缩小范围。</p>
-                    </div>}
-                    <div className="overflow-x-auto"><table className="w-full text-left text-caption">
-                      <thead><tr className="border-b"><th className="p-2">序号</th><th className="p-2">商品</th><th className="p-2">合同价</th><th className="p-2">采购数量</th><th className="p-2">操作</th></tr></thead>
+
+                <div className="px-4 py-4 lg:px-5" aria-label="采购商品选择">
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                    <h2 className="text-h3">商品明细</h2>
+                    <button type="button" aria-label="打开采购商品选择" disabled={!orderSupplierId || orderSources.length === 0} onClick={() => { setOrderProductQuery(''); setOrderProductPickerOpen(true) }} className="rounded-lg border border-border bg-white px-4 py-2 text-button text-amber-fg disabled:cursor-not-allowed disabled:text-gray3">＋ 添加商品</button>
+                  </div>
+                  <div className="overflow-x-auto rounded-lg border border-border">
+                    <table className="w-full min-w-[740px] text-left text-caption">
+                      <thead className="bg-bg"><tr className="border-b border-border"><th className="w-14 px-3 py-2.5">序号</th><th className="min-w-52 px-3 py-2.5">商品</th><th className="w-40 px-3 py-2.5">采购数量</th><th className="w-44 px-3 py-2.5">本单单价</th><th className="w-28 px-3 py-2.5 text-right">小计</th><th className="w-16 px-3 py-2.5 text-right">操作</th></tr></thead>
                       <tbody>
-                        {selectedOrderContract.lines.filter(line => Object.hasOwn(orderQuantities, line.id)).map((line, index) => <tr key={line.id} className="border-b border-border">
-                          <td className="p-2">{index + 1}</td><td className="p-2"><b>{line.productNameSnapshot}</b><div className="text-gray3">{line.productCodeSnapshot} · {line.productSpecSnapshot || '—'} · {line.purchaseUnit}</div></td>
-                          <td className="p-2">{unitPriceMoney(line.unitPrice)} / {line.purchaseUnit}</td>
-                          <td className="p-2"><input type="number" onWheel={event => event.currentTarget.blur()} aria-label={`${line.productNameSnapshot}采购数量`} min="0" step="any" value={orderQuantities[line.id] || ''} onChange={event => setOrderQuantities(current => ({...current, [line.id]: event.target.value}))} className="input max-w-36" /></td>
-                          <td className="p-2"><button type="button" aria-label={`移除采购商品 ${line.productNameSnapshot}`} onClick={() => setOrderQuantities(current => { const next = {...current}; delete next[line.id]; return next })} className="text-red-fg">移除</button></td>
+                        {orderSources.filter(source => Object.hasOwn(orderQuantities, source.id)).map((source, index) => <tr key={source.id} className="border-b border-border last:border-b-0">
+                          <td className="px-3 py-2.5 text-gray3">{index + 1}</td>
+                          <td className="px-3 py-2.5"><b className="text-body">{source.product.name}</b><div className="mt-0.5 text-micro text-gray3">{source.product.code} · {source.product.spec || '—'}</div></td>
+                          <td className="px-3 py-2.5"><div className="flex items-center gap-2"><input type="number" onWheel={event => event.currentTarget.blur()} aria-label={`${source.product.name}采购数量`} min={String(source.minOrderQty)} step="any" value={orderQuantities[source.id] || ''} onChange={event => setOrderQuantities(current => ({ ...current, [source.id]: event.target.value }))} className="input !w-24 !py-1.5 text-right font-num" /><span className="whitespace-nowrap text-gray2">{source.purchaseUnit}</span></div></td>
+                          <td className="px-3 py-2.5"><div className="flex items-center gap-2"><input type="number" onWheel={event => event.currentTarget.blur()} aria-label={`${source.product.name}本单单价`} min="0.000001" step="any" placeholder="0.00" value={orderPrices[source.id] || ''} onChange={event => setOrderPrices(current => ({ ...current, [source.id]: event.target.value }))} className="input !w-28 !py-1.5 text-right font-num" /><span className="whitespace-nowrap text-gray2">元/{source.purchaseUnit}</span></div></td>
+                          <td className="px-3 py-2.5 text-right font-num">{Number(orderQuantities[source.id]) > 0 && Number(orderPrices[source.id]) > 0 ? money(Number(orderQuantities[source.id]) * Number(orderPrices[source.id])) : '—'}</td>
+                          <td className="px-3 py-2.5 text-right"><button type="button" aria-label={`移除采购商品 ${source.product.name}`} onClick={() => setOrderQuantities(current => { const next = { ...current }; delete next[source.id]; return next })} className="text-red-fg">移除</button></td>
                         </tr>)}
-                        {Object.keys(orderQuantities).length === 0 && <tr><td colSpan={5} className="p-5 text-center text-gray3">尚未添加商品，请先搜索要采购的商品。</td></tr>}
+                        {Object.keys(orderQuantities).length === 0 && <tr><td colSpan={6} className="px-3 py-10 text-center text-gray3">{orderSupplierId ? orderSources.length ? '暂无商品' : '该供应商暂无可采购商品' : '请先选择供应商'}</td></tr>}
                       </tbody>
-                    </table></div>
-                  </section>
-                )}
-                <div className="mt-4 flex justify-end">
-                  <ActionButton onClick={() => void createOrder()} disabled={working === 'create-order' || !selectedOrderContract}>
-                    保存采购单草稿
-                  </ActionButton>
+                    </table>
+                  </div>
                 </div>
-              </Panel>
+
+                <div className="border-t border-border px-4 py-4 lg:px-5"><Field label="备注"><input className="input" value={orderNote} maxLength={500} onChange={event => setOrderNote(event.target.value)} placeholder="选填" /></Field></div>
+                <div className="sticky bottom-0 z-10 flex flex-wrap items-center justify-between gap-3 border-t border-border bg-white px-4 py-3 lg:px-5">
+                  <div className="text-caption text-gray2">共 {Object.keys(orderQuantities).length} 项 <b className="ml-3 text-h3 text-ink">{money(orderSources.filter(source => Object.hasOwn(orderQuantities, source.id)).reduce((sum, source) => sum + (Number(orderQuantities[source.id]) || 0) * (Number(orderPrices[source.id]) || 0), 0))}</b></div>
+                  <div className="flex flex-wrap gap-2"><a href="/v2/supply-chain/procurement/orders" className="rounded-lg border border-border bg-white px-4 py-2 text-button">取消</a><ActionButton tone="light" onClick={() => void createOrder()} disabled={working === 'create-order' || !orderSupplierId}>保存草稿</ActionButton><ActionButton onClick={() => void createOrder(true)} disabled={working === 'create-order' || !orderSupplierId}>创建并发送供应商</ActionButton></div>
+                </div>
+              </section>
+            )}
+            {showOrderForm && orderProductPickerOpen && (
+              <div className="fixed inset-0 z-50" role="presentation">
+                <button type="button" aria-label="关闭商品选择" className="absolute inset-0 w-full bg-ink/45" onClick={() => setOrderProductPickerOpen(false)} />
+                <section role="dialog" aria-modal="true" aria-label="选择采购商品" className="absolute inset-x-0 bottom-0 flex max-h-[82vh] flex-col rounded-t-xl bg-white shadow-xl lg:inset-y-0 lg:left-auto lg:right-0 lg:w-[560px] lg:max-h-none lg:rounded-none">
+                  <div className="flex items-center justify-between border-b border-border px-5 py-4"><h2 className="text-h2">添加商品</h2><button type="button" onClick={() => setOrderProductPickerOpen(false)} className="px-2 py-1 text-caption text-gray2">完成</button></div>
+                  <div className="border-b border-border px-5 py-3"><input type="search" aria-label="搜索采购商品" placeholder="搜索商品名称、编码或规格" className={PROCUREMENT_SEARCH_FIELD} value={orderProductQuery} onChange={event => setOrderProductQuery(event.target.value)} /></div>
+                  <div className="flex-1 overflow-y-auto divide-y divide-border" aria-label="采购商品搜索结果">
+                    {orderSources.filter(source => `${source.product.name} ${source.product.code} ${source.product.spec || ''}`.toLowerCase().includes(orderProductQuery.trim().toLowerCase())).slice(0, 100).map(source => <div key={source.id} className="flex items-center justify-between gap-4 px-5 py-3">
+                      <div className="min-w-0"><b className="text-body">{source.product.name}</b><div className="mt-0.5 text-micro text-gray3">{source.product.code} · {source.product.spec || '—'} · {source.purchaseUnit}</div><div className="mt-1 text-caption text-gray2">{source.lastOrderUnitPrice != null ? `上次 ${unitPriceMoney(source.lastOrderUnitPrice)}/${source.purchaseUnit}` : source.quotedUnitPrice != null && Number(source.quotedUnitPrice) > 0 ? `报价 ${unitPriceMoney(source.quotedUnitPrice)}/${source.purchaseUnit}` : '本单填写单价'}</div></div>
+                      <button type="button" aria-label={`添加采购商品 ${source.product.name}`} disabled={Object.hasOwn(orderQuantities, source.id)} onClick={() => addOrderProduct(source)} className="shrink-0 rounded-lg border border-border px-3 py-2 text-button text-amber-fg disabled:text-gray3">{Object.hasOwn(orderQuantities, source.id) ? '已添加' : '添加'}</button>
+                    </div>)}
+                    {!orderSources.some(source => `${source.product.name} ${source.product.code} ${source.product.spec || ''}`.toLowerCase().includes(orderProductQuery.trim().toLowerCase())) && <p className="p-5 text-center text-caption text-gray3">没有符合条件的商品</p>}
+                  </div>
+                </section>
+              </div>
             )}
             {showOrderForm && quickContractFromOrder && (
               <Panel title="快速建合同（供应商与现行供货价已带出）" onClose={() => setQuickContractFromOrder(false)}>
@@ -1925,96 +1992,39 @@ export default function UpstreamProcurementPage() {
                 </div>
               </Panel>
             )}
-            <section aria-label="采购单筛选" className="rounded-xl border border-border bg-white p-3">
-              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
-                <Field label="日期口径"><select aria-label="采购日期口径" className="input" value={orderFilterDraft.dateField} onChange={event => setOrderFilterDraft(current => ({...current,dateField:event.target.value as OrderFilters['dateField']}))}><option value="createdAt">下单日</option><option value="expectedArrivalAt">到货日</option></select></Field>
-                <Field label="开始日期"><input aria-label="采购开始日期" type="date" className="input" value={orderFilterDraft.dateFrom} onChange={event => setOrderFilterDraft(current => ({...current,dateFrom:event.target.value}))} /></Field>
-                <Field label="结束日期"><input aria-label="采购结束日期" type="date" className="input" value={orderFilterDraft.dateTo} onChange={event => setOrderFilterDraft(current => ({...current,dateTo:event.target.value}))} /></Field>
-                <Field label="供应商"><SearchableSelect searchWhenLong searchLabel="搜索筛选采购供应商" aria-label="筛选采购供应商" className="input" value={orderFilterDraft.supplierId} onChange={event => setOrderFilterDraft(current => ({...current,supplierId:event.target.value}))}><option value="">全部供应商</option>{suppliers.map(supplier => <option key={supplier.id} value={supplier.id}>{supplier.no} · {supplier.name}</option>)}</SearchableSelect></Field>
-                <Field label="商品"><input aria-label="筛选采购商品" type="search" className="input" placeholder="商品名称 / 编码" value={orderFilterDraft.productQuery} onChange={event => setOrderFilterDraft(current => ({...current,productQuery:event.target.value}))} onKeyDown={event => {if(event.key==='Enter'){setOrderPage(1);setOrderFilters({...orderFilterDraft})}}} /></Field>
-                <div className="flex items-end gap-2"><button type="button" className="rounded-lg bg-ink px-4 py-2 text-white" onClick={() => {setOrderPage(1);setOrderFilters({...orderFilterDraft})}}>查询</button><button type="button" className="rounded-lg border border-border px-4 py-2" onClick={() => {setOrderFilterDraft(EMPTY_ORDER_FILTERS);setOrderFilters(EMPTY_ORDER_FILTERS);setOrderPage(1)}}>重置</button></div>
+            {!showOrderForm && <><section aria-label="采购单筛选" className="rounded-xl border border-border bg-white p-3">
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <Field label="日期口径"><select aria-label="采购日期口径" className={PROCUREMENT_SEARCH_FIELD} value={orderFilterDraft.dateField} onChange={event => setOrderFilterDraft(current => ({...current,dateField:event.target.value as OrderFilters['dateField']}))}><option value="createdAt">下单日</option><option value="expectedArrivalAt">到货日</option></select></Field>
+                <Field label="开始日期"><input aria-label="采购开始日期" type="date" className={PROCUREMENT_SEARCH_FIELD} value={orderFilterDraft.dateFrom} onChange={event => setOrderFilterDraft(current => ({...current,dateFrom:event.target.value}))} /></Field>
+                <Field label="结束日期"><input aria-label="采购结束日期" type="date" className={PROCUREMENT_SEARCH_FIELD} value={orderFilterDraft.dateTo} onChange={event => setOrderFilterDraft(current => ({...current,dateTo:event.target.value}))} /></Field>
+                <Field label="供应商"><SearchableSelect searchWhenLong searchLabel="搜索筛选采购供应商" searchInputClassName={PROCUREMENT_SEARCH_INPUT} aria-label="筛选采购供应商" className={PROCUREMENT_SEARCH_FIELD} value={orderFilterDraft.supplierId} onChange={event => setOrderFilterDraft(current => ({...current,supplierId:event.target.value}))}><option value="">全部供应商</option>{suppliers.map(supplier => <option key={supplier.id} value={supplier.id}>{supplier.no} · {supplier.name}</option>)}</SearchableSelect></Field>
+                <Field label="商品"><input aria-label="筛选采购商品" type="search" className={PROCUREMENT_SEARCH_FIELD} placeholder="商品名称 / 编码" value={orderFilterDraft.productQuery} onChange={event => setOrderFilterDraft(current => ({...current,productQuery:event.target.value}))} onKeyDown={event => {if(event.key==='Enter'){setOrderPage(1);setOrderFilters({...orderFilterDraft})}}} /></Field>
+                <Field label="处理阶段"><select aria-label="筛选采购单状态" className={PROCUREMENT_SEARCH_FIELD} value={orderFilterDraft.status} onChange={event => setOrderFilterDraft(current => ({...current,status:event.target.value}))}><option value="">全部状态</option>{Object.entries(UPSTREAM_ORDER_STATUS_LABEL).filter(([key]) => key !== 'CLOSED').map(([key,label]) => <option key={key} value={key}>{label}</option>)}</select></Field>
+                <div className="flex items-end gap-2"><button type="button" className="h-10 rounded-md border border-gray1 bg-gray1 px-4 text-white" onClick={() => {setOrderPage(1);setOrderFilters({...orderFilterDraft})}}>查询</button><button type="button" className="h-10 rounded-md border border-[#c9c9c9] bg-white px-4" onClick={() => {setOrderFilterDraft(EMPTY_ORDER_FILTERS);setOrderFilters(EMPTY_ORDER_FILTERS);setOrderPage(1)}}>重置</button></div>
               </div>
               <p className="mt-2 text-caption text-gray3">共 {orderTotal} 张采购单</p>
             </section>
             {orders.length === 0 ? (
               <Empty text={Object.entries(orderFilters).some(([key,value])=>key!=='dateField'&&value.trim())?'没有符合筛选条件的采购单':'还没有上游采购单'} actionLabel="新建采购单" onAction={openNewOrderForm} />
-            ) : (
-              orders.map((order, index) => (
-                <article id={`order-${order.id}`} key={order.id} className="rounded-2xl border border-border bg-white p-4 shadow-sm">
-                  <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span aria-label="采购单序号" className="mr-2 font-num text-gray3">{(orderPage - 1) * 20 + index + 1}</span>
-                        <button type="button" onClick={() => void openOrderDetail(order)} className="text-h3 underline decoration-dotted underline-offset-4" aria-label={`查看采购单 ${order.no} 明细`}>
-                          {order.no}
-                        </button>
-                        <Badge status={order.status} labels={UPSTREAM_ORDER_STATUS_LABEL} />
-                        {order.hasTemporaryPrice && <span className="rounded-full bg-red-50 px-2 py-1 text-micro text-red-700">临时价</span>}
-                        {purchaseOrderOverdueText(order) && <span className="rounded-full bg-red-50 px-2 py-1 text-micro font-semibold text-red-700">{purchaseOrderOverdueText(order)}</span>}
-                      </div>
-                      <p className="mt-1 text-caption text-gray2">
-                        {order.supplier.name} → {order.warehouse.name} · {order._count?.lines || 0} 项 · 到货 {shortDate(order.expectedArrivalAt)}
-                      </p>
-                    </div>
-                    <div className="text-right">
-                      <div className="text-h3">{money(order.totalAmount)}</div>
-                      <div className="mt-2 flex flex-wrap justify-end gap-2">
-                        {order.status === 'DRAFT' && (
-                          <ActionButton
-                            onClick={() => void run(order.id, () => apiFetch(`/api/upstream/purchase-orders/${order.id}/submit-for-approval`, { method: 'POST' }), '采购单已提交内部审核')}
-                            disabled={working === order.id}
-                          >
-                            提交审核
-                          </ActionButton>
-                        )}
-                        {order.status === 'PENDING_APPROVAL' && (
-                          <ActionButton
-                            onClick={() => openActionConfirm({
-                              title: `审核并发送采购单 ${order.no}`,
-                              body: '请确认合同、价格和数量无误。确认后采购单会发送给供应商。',
-                              confirmLabel: '确认并发送', tone: 'primary',
-                              onConfirm: async () => {
-                                await run(order.id, () => apiFetch(`/api/upstream/purchase-orders/${order.id}/approve-and-send`, { method: 'POST' }), '采购单已发送供应商', undefined, true)
-                              },
-                            })}
-                            disabled={working === order.id}
-                          >
-                            审核并发送
-                          </ActionButton>
-                        )}
-                        {order.status === 'CHANGE_PROPOSED' && (
-                          <ActionButton onClick={() => void openOrderDetail(order, 'revision')} disabled={working === order.id}>
-                            查看改单内容
-                          </ActionButton>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </article>
-              ))
-            )}
-            <div className="flex items-center justify-end gap-3 text-caption" aria-label="采购单分页"><button type="button" disabled={orderPage<=1} onClick={() => setOrderPage(page => page-1)} className="rounded-lg border border-border px-3 py-2 disabled:opacity-40">上一页</button><span>第 {orderPage} / {Math.max(1,Math.ceil(orderTotal/20))} 页 · 每页20条</span><button type="button" disabled={orderPage*20>=orderTotal} onClick={() => setOrderPage(page => page+1)} className="rounded-lg border border-border px-3 py-2 disabled:opacity-40">下一页</button></div>
-            <div className="rounded-2xl border border-border bg-white p-4">
-              <h2 className="text-h3">供应商发货动态</h2>
-              <div className="mt-3 space-y-2">
-                {shipments.length === 0 ? (
-                  <p className="text-caption text-gray3">暂无发货单</p>
-                ) : (
-                  shipments.map((shipment) => (
-                    <div key={shipment.id} className="flex flex-col gap-2 rounded-xl bg-bg p-3 sm:flex-row sm:items-center sm:justify-between">
-                      <div>
-                        <b>{shipment.no}</b>
-                        <p className="text-caption text-gray2">
-                          采购单 {shipment.purchaseOrder.no} · {shipment.lines.length} 项 · {UPSTREAM_ORDER_STATUS_LABEL[shipment.status] || shipment.status}
-                        </p>
-                      </div>
-                      <div className="overflow-x-auto"><table className="text-caption"><thead><tr><th className="p-2">商品</th><th className="p-2">数量 / 单位</th><th className="p-2">质检</th></tr></thead><tbody>{shipment.lines.map(line=><tr key={line.id}><td className="p-2">{line.purchaseOrderLine.productNameSnapshot}</td><td className="p-2">{line.shippedQty} {line.purchaseUnit}</td><td className="p-2"><DocumentQualityImageButton kind="BATCH" sourceId={`S:${line.id}`}/></td></tr>)}</tbody></table></div>
-                      {['SHIPPED', 'PARTIALLY_RECEIVED'].includes(shipment.status) && !shipmentFullyInspected(shipment) && <a className="rounded-lg border border-accent px-3 py-2 text-accent" href={`/v2/supply-chain/procurement/receipts/new?shipment=${encodeURIComponent(shipment.id)}`}>登记到货</a>}
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
+            ) : <div className="overflow-x-auto border border-border bg-white"><table className="w-full min-w-[1120px] text-left text-caption">
+              <thead className="bg-bg"><tr className="border-b border-border"><th className="p-3">采购单号 / 下单时间</th><th className="p-3">供应商 / 商品</th><th className="p-3">收货仓 / 到货日</th><th className="p-3">金额</th><th className="p-3">状态</th><th className="p-3">操作</th></tr></thead>
+              <tbody>{orders.map(order => <tr id={`order-${order.id}`} key={order.id} className="border-b border-border last:border-0">
+                <td className="p-3 align-top"><button type="button" onClick={() => void openOrderDetail(order)} className="font-num font-medium text-accent underline" aria-label={`查看采购单 ${order.no} 明细`}>{order.no}</button><div className="mt-1 whitespace-nowrap text-gray3">{order.createdAt ? new Date(order.createdAt).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' }) : '—'}</div></td>
+                <td className="max-w-64 p-3 align-top"><b>{order.supplier.name}</b><div className="mt-1 truncate text-gray2" title={order.lines?.map(line => line.productNameSnapshot).join('、')}>{order.lines?.map(line => line.productNameSnapshot).join('、') || `${order._count?.lines || 0} 项商品`}{(order._count?.lines || 0) > 3 ? ` 等 ${order._count?.lines} 项` : ''}</div></td>
+                <td className="p-3 align-top"><div>{order.warehouse.name}</div><div className="mt-1 whitespace-nowrap text-gray3">{shortDate(order.expectedArrivalAt)}{purchaseOrderOverdueText(order) ? ` · ${purchaseOrderOverdueText(order)}` : ''}</div></td>
+                <td className="whitespace-nowrap p-3 align-top"><b>{money(order.totalAmount)}</b>{order.hasTemporaryPrice && <div className="text-red-700">临时价</div>}</td>
+                <td className="whitespace-nowrap p-3 align-top"><Badge status={order.status} labels={UPSTREAM_ORDER_STATUS_LABEL} /></td>
+                <td className="p-3 align-top"><div className="flex flex-wrap gap-2"><ActionButton tone="light" onClick={() => void openOrderDetail(order)}>查看</ActionButton>
+                  {order.status === 'DRAFT' && <ActionButton onClick={() => void run(order.id, () => apiFetch(`/api/upstream/purchase-orders/${order.id}/send-to-supplier`, { method: 'POST' }), '采购单已发送供应商')} disabled={working === order.id}>发送供应商</ActionButton>}
+                  {order.status === 'PENDING_APPROVAL' && <ActionButton onClick={() => openActionConfirm({
+                    title: `发送采购单 ${order.no}`, body: '请确认本单商品、价格和数量无误。确认后采购单会发送给供应商。', confirmLabel: '确认并发送', tone: 'primary',
+                    onConfirm: async () => { await run(order.id, () => apiFetch(`/api/upstream/purchase-orders/${order.id}/approve-and-send`, { method: 'POST' }), '采购单已发送供应商', undefined, true) },
+                  })} disabled={working === order.id}>发送供应商</ActionButton>}
+                  {order.status === 'CHANGE_PROPOSED' && <ActionButton onClick={() => void openOrderDetail(order, 'revision')} disabled={working === order.id}>查看改单内容</ActionButton>}
+                </div></td>
+              </tr>)}</tbody>
+            </table></div>}
+            <div className="flex items-center justify-end gap-3 text-caption" aria-label="采购单分页"><button type="button" disabled={orderPage<=1} onClick={() => setOrderPage(page => page-1)} className="rounded-lg border border-border px-3 py-2 disabled:opacity-40">上一页</button><span>第 {orderPage} / {Math.max(1,Math.ceil(orderTotal/20))} 页 · 每页20条</span><button type="button" disabled={orderPage*20>=orderTotal} onClick={() => setOrderPage(page => page+1)} className="rounded-lg border border-border px-3 py-2 disabled:opacity-40">下一页</button></div></>}
           </section>
         )}
 
@@ -2142,58 +2152,18 @@ export default function UpstreamProcurementPage() {
                 </div>
               </Panel>
             )}
-            {receipts.length === 0 ? (
-              <Empty text="暂无待验收单据" />
-            ) : (
-              receipts.map((receipt) => (
-                <article key={receipt.id} className="rounded-2xl border border-border bg-white p-4">
-                  <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => void openReceiptDetail(receipt)}
-                          className="text-h3 underline decoration-dotted underline-offset-4"
-                          aria-label={`查看收货单 ${receipt.no} 明细`}
-                        >
-                          {receipt.no}
-                        </button>
-                        <Badge status={receipt.status} labels={UPSTREAM_RECEIPT_STATUS_LABEL} />
-                      </div>
-                      <p className="mt-1 text-caption text-gray2">
-                        {receipt.supplier.name} · 采购单 <b>{receipt.purchaseOrder.no}</b> · 发货单 {receipt.shipment?.no || '—'}
-                      </p>
-                      <p className="mt-1 text-caption text-gray3">
-                        {receipt._count.lines} 项 · 采购单金额 <b>{receipt.purchaseOrder.totalAmount == null ? '—' : money(receipt.purchaseOrder.totalAmount)}</b> · 本次应付{' '}
-                        <b>{money(receipt.payableAmount)}</b>
-                        {receipt.reviewReasons?.length ? ` · 复核：${receipt.reviewReasons.join('、')}` : ''}
-                      </p>
-                      {receipt.status === 'POSTED' && receipt._count.claims > 0 && <p className="mt-1 text-micro text-amber-fg">已关联差异单，不能整单冲销；如库存有误请走实盘调整。</p>}
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <a
-                        href={`/v2/supply-chain/suppliers/${encodeURIComponent(receipt.supplier.id)}/evidence?receiptId=${encodeURIComponent(receipt.id)}`}
-                        className="rounded-lg border border-accent bg-white px-3 py-2 text-caption font-medium text-accent"
-                      >
-                        {receipt.status === 'POSTED' ? '查看来货证明' : '维护来货证明'}
-                      </a>
-                      <ProcurementProgressActions kind="RECEIPT" row={receipt} role={getUser()?.role || ''} busy={Boolean(working)} onAction={action => confirmProcurementProgress('RECEIPT', receipt, action)} />
-
-                      {receipt.status === 'POSTED' && (
-                        <ActionButton tone="light" onClick={() => void openPostReceiptClaim(receipt)}>
-                          收货后补报异常
-                        </ActionButton>
-                      )}
-                      {receipt.status === 'POSTED' && receipt._count.claims === 0 && (
-                        <ActionButton tone="danger" onClick={() => void reverseReceipt(receipt)} disabled={working === `reverse-${receipt.id}`}>
-                          冲销收货
-                        </ActionButton>
-                      )}
-                    </div>
-                  </div>
-                </article>
-              ))
-            )}
+            {receipts.length === 0 ? <Empty text="暂无待验收单据" /> : <div className="overflow-x-auto border border-border bg-white"><table className="w-full min-w-[980px] table-fixed text-left text-caption">
+              <thead className="bg-bg"><tr className="border-b border-border"><th className="w-[18%] px-3 py-2.5">收货单号</th><th className="w-[18%] px-3 py-2.5">供应商</th><th className="w-[23%] px-3 py-2.5">采购单 / 发货单</th><th className="w-[9%] px-3 py-2.5">商品</th><th className="w-[12%] px-3 py-2.5 text-right">本次应付</th><th className="w-[11%] px-3 py-2.5">状态</th><th className="w-[9%] px-3 py-2.5">操作</th></tr></thead>
+              <tbody>{receipts.map((receipt, index) => <tr key={receipt.id} className={`border-b border-border last:border-0 ${index % 2 ? 'bg-bg/50' : 'bg-white'}`}>
+                <td className="px-3 py-2.5 align-middle"><button type="button" onClick={() => void openReceiptDetail(receipt)} className="font-medium text-accent underline" aria-label={`查看收货单 ${receipt.no} 明细`}>{receipt.no}</button></td>
+                <td className="truncate px-3 py-2.5 align-middle" title={receipt.supplier.name}>{receipt.supplier.name}</td>
+                <td className="px-3 py-2.5 align-middle"><div className="truncate" title={receipt.purchaseOrder.no}>{receipt.purchaseOrder.no}</div><div className="mt-0.5 truncate text-gray3" title={receipt.shipment?.no || ''}>{receipt.shipment?.no || '—'}</div></td>
+                <td className="px-3 py-2.5 align-middle">{receipt._count.lines} 项{receipt.reviewReasons?.length ? <div className="text-amber-fg">需复核</div> : null}</td>
+                <td className="whitespace-nowrap px-3 py-2.5 text-right align-middle font-num">{money(receipt.payableAmount)}</td>
+                <td className="whitespace-nowrap px-3 py-2.5 align-middle"><Badge status={receipt.status} labels={UPSTREAM_RECEIPT_STATUS_LABEL} /></td>
+                <td className="px-3 py-2.5 align-middle"><button type="button" onClick={() => void openReceiptDetail(receipt)} className="whitespace-nowrap text-accent underline">查看处理</button></td>
+              </tr>)}</tbody>
+            </table></div>}
           </section>
         )}
 
@@ -2202,68 +2172,19 @@ export default function UpstreamProcurementPage() {
             <div className="flex justify-end">
               <a className="rounded-lg border border-border bg-white px-4 py-2" href="/v2/supply-chain/procurement/returns/new">新建采购退货</a>
             </div>
-            {purchaseReturns.length === 0 ? (
-              <Empty text="暂无采购退货单" />
-            ) : (
-              purchaseReturns.map((row) => (
-                <article key={row.id} className="rounded-2xl border border-border bg-white p-4">
-                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                    <div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <b className="text-h3">{row.no}</b>
-                        <Badge
-                          status={row.status}
-                          labels={{
-                            DRAFT: '草稿',
-                            PENDING_APPROVAL: '待审核',
-                            APPROVED: '已出库',
-                            RECEIVED: '供应商已收货',
-                            REJECTED: '已驳回',
-                            CANCELLED: '已取消',
-                          }}
-                        />
-                        <span className="text-caption text-red-700">退货金额 {money(row.settlementAmount)}</span>
-                      </div>
-                      <p className="mt-1 text-caption text-gray2">
-                        {row.supplier.name} · {row.warehouse.name} · {row.reason}
-                      </p>
-                      <ul className="mt-2 text-caption text-gray2">
-                        {row.lines.map((line) => (
-                          <li key={line.id}>
-                            · 原收货单 {line.receiptLine.receipt.no} · {line.product.name} {String(line.purchaseQuantity)} {line.purchaseUnit} · {money(line.settlementAmount)}
-                          </li>
-                        ))}
-                      </ul>
-                      {['APPROVED', 'RECEIVED'].includes(row.status) && (
-                        <p className="mt-2 text-micro text-gray3">
-                          实际库存成本 {money(row.ledgerCostAmount)} · 审批出库 {shortDate(row.approvedAt)}
-                          {row.receivedAt ? ` · 供应商签收 ${shortDate(row.receivedAt)}` : ''}
-                        </p>
-                      )}
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <ProcurementProgressActions kind="RETURN" row={row} role={getUser()?.role || ''} busy={Boolean(working)} onAction={action => confirmProcurementProgress('RETURN', row, action)} />
-
-                      {row.status === 'APPROVED' && (
-                        <ActionButton
-                          onClick={() => openActionConfirm({
-                            title: `登记退货单 ${row.no} 实际收货`,
-                            body: '仅在供应商已实际收到退货货物后确认。',
-                            confirmLabel: '确认已收货', tone: 'primary',
-                            onConfirm: async () => {
-                              await run(`receive-return-${row.id}`, () => apiFetch(`/api/upstream/purchase-returns/${row.id}/receive`, { method: 'POST', body: '{}' }), '已登记供应商实际收货', undefined, true)
-                            },
-                          })}
-                          disabled={working === `receive-return-${row.id}`}
-                        >
-                          登记供应商实收
-                        </ActionButton>
-                      )}
-                    </div>
-                  </div>
-                </article>
-              ))
-            )}
+            {purchaseReturns.length === 0 ? <Empty text="暂无采购退货单" /> : <div className="overflow-x-auto border border-border bg-white">
+              <table className="w-full min-w-[980px] table-fixed text-left text-caption">
+                <thead className="bg-bg"><tr className="border-b border-border"><th className="w-[18%] px-3 py-2.5">退货单号</th><th className="w-[16%] px-3 py-2.5">供应商</th><th className="w-[14%] px-3 py-2.5">仓库</th><th className="w-[20%] px-3 py-2.5">原收货单 / 商品</th><th className="w-[12%] px-3 py-2.5 text-right">退货金额</th><th className="w-[10%] px-3 py-2.5">状态</th><th className="w-[10%] px-3 py-2.5">操作</th></tr></thead>
+                <tbody>{purchaseReturns.map((row, index) => <tr key={row.id} className={`border-b border-border last:border-0 ${index % 2 ? 'bg-bg/50' : 'bg-white'}`}>
+                  <td className="px-3 py-2.5 align-middle"><a href={`/v2/supply-chain/procurement/returns/${encodeURIComponent(row.id)}/edit`} className="text-accent underline">{row.no}</a></td>
+                  <td className="truncate px-3 py-2.5 align-middle" title={row.supplier.name}>{row.supplier.name}</td><td className="truncate px-3 py-2.5 align-middle" title={row.warehouse.name}>{row.warehouse.name}</td>
+                  <td className="px-3 py-2.5 align-middle"><div className="truncate" title={row.lines.map(line => `${line.receiptLine.receipt.no} · ${line.product.name}`).join('、')}>{row.lines.map(line => `${line.receiptLine.receipt.no} · ${line.product.name}`).join('、')}</div><div className="text-gray3">{row.lines.length} 项 · {row.reason}</div></td>
+                  <td className="whitespace-nowrap px-3 py-2.5 text-right align-middle font-num">{money(row.settlementAmount)}</td>
+                  <td className="whitespace-nowrap px-3 py-2.5 align-middle"><Badge status={row.status} labels={{ DRAFT: '草稿', PENDING_APPROVAL: '待审核', APPROVED: '已出库', RECEIVED: '供应商已收货', REJECTED: '已驳回', CANCELLED: '已取消' }} /></td>
+                  <td className="px-3 py-2.5 align-middle"><button type="button" onClick={() => setViewingPurchaseReturn(row)} className="whitespace-nowrap text-accent underline">查看处理</button></td>
+                </tr>)}</tbody>
+              </table>
+            </div>}
           </section>
         )}
 
@@ -2616,6 +2537,12 @@ export default function UpstreamProcurementPage() {
 
         {!loading && tab === 'contracts' && (
           <section className="space-y-4">
+            <div className="max-w-sm">
+              <SearchableSelect searchLabel="搜索供应商合同" value={archiveSupplierId} onChange={event => { setArchiveSupplierId(event.target.value); setContractSupplierId(event.target.value) }} className="input">
+                <option value="">全部供应商</option>
+                {suppliers.map(supplier => <option key={supplier.id} value={supplier.id}>{supplier.no} · {supplier.name}</option>)}
+              </SearchableSelect>
+            </div>
             {viewingContract && (
               <Panel title={`合同内容 · ${viewingContract.title}`} onClose={() => setViewingContract(null)} printId={`contract-${viewingContract.id}`}>
                 <div className="grid gap-2 rounded-xl bg-bg p-3 text-caption sm:grid-cols-2 lg:grid-cols-4">
@@ -2649,10 +2576,6 @@ export default function UpstreamProcurementPage() {
                     <div>{contractSettlementText(viewingContract)}</div>
                   </div>
                   <div>
-                    <span className="text-gray3">价格口径</span>
-                    <div>{viewingContract.taxInclusive ? '含税价' : '不含税价'}</div>
-                  </div>
-                  <div>
                     <span className="text-gray3">币种</span>
                     <div>{viewingContract.currency}</div>
                   </div>
@@ -2661,52 +2584,14 @@ export default function UpstreamProcurementPage() {
                     <div>{viewingContract.paymentMethod || '—'}</div>
                   </div>
                 </div>
-                <div className="mt-4 overflow-x-auto">
-                  <table className="w-full text-left text-caption">
-                    <thead>
-                      <tr className="border-b">
-                        <th className="p-2">商品</th>
-                        <th className="p-2">编码</th>
-                        <th className="p-2">规格</th>
-                        <th className="p-2">供应商编码</th>
-                        <th className="p-2">采购单位</th>
-                        <th className="p-2">库存换算</th>
-                        <th className="p-2">合同单价</th>
-                        <th className="p-2">税率</th>
-                        <th className="p-2">起订量</th>
-                        <th className="p-2">包装倍数</th>
-                        <th className="p-2">交期</th>
-                        <th className="p-2">短/溢装</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {viewingContract.lines.map((line) => (
-                        <tr key={line.id} className="border-b border-border">
-                          <td className="p-2">
-                            <b>{line.productNameSnapshot}</b>
-                          </td>
-                          <td className="p-2">{line.productCodeSnapshot}</td>
-                          <td className="p-2">{line.productSpecSnapshot || '—'}</td>
-                          <td className="p-2">{line.supplierSkuSnapshot || '—'}</td>
-                          <td className="p-2">{line.purchaseUnit}</td>
-                          <td className="p-2">
-                            1 {line.purchaseUnit} = {String(line.inventoryUnitsPerPurchaseUnit)} {line.inventoryUnit}
-                          </td>
-                          <td className="p-2">
-                            <b>{unitPriceMoney(line.unitPrice)}</b>
-                          </td>
-                          <td className="p-2">{formatPercent(line.taxRate)}</td>
-                          <td className="p-2">{String(line.minOrderQty)}</td>
-                          <td className="p-2">{String(line.packageMultiple)}</td>
-                          <td className="p-2">{line.leadTimeDays} 天</td>
-                          <td className="p-2">
-                            {formatPercent(line.shortTolerancePct)} / {formatPercent(line.overTolerancePct)}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                {Boolean(viewingContract.attachments?.length) && <div className="mt-3 text-caption">
+                  <b>合同附件</b>
+                  <div className="mt-1 flex flex-wrap gap-3">
+                    {viewingContract.attachments?.map((attachment, index) => attachment.url
+                      ? <a key={attachment.key || index} href={attachment.url} target="_blank" rel="noreferrer" className="text-accent underline">{attachment.name || `附件 ${index + 1}`}</a>
+                      : <span key={attachment.key || index}>{attachment.name || `附件 ${index + 1}`}（暂不可预览）</span>)}
+                  </div>
+                </div>}
               </Panel>
             )}
             <div className="flex justify-end">
@@ -2714,7 +2599,7 @@ export default function UpstreamProcurementPage() {
               <ActionButton onClick={toggleContractForm} disabled={working === 'create-contract' || contractCopyRecoveryBlocked}>{showContractForm ? '收起' : '新建合同'}</ActionButton>
             </div>
             {showContractForm && (
-              <Panel title={contractCopy ? `复制合同 V${contractCopy.version} 为新版草稿` : '新建月结合同'}>
+              <Panel title={contractCopy ? `复制合同 V${contractCopy.version} 为新版草稿` : '新建合同档案'}>
                 {contractCopy && <div className="mb-3 rounded-xl border border-amber/30 bg-amber/10 p-3 text-caption">
                   仅修改下列商品价格；供应商、编号、结算、币种、税率、起止日期、容差及附件等原条款全部保留。
                   原有效期：{shortDate(contractCopy.startsAt)} 至 {shortDate(contractCopy.endsAt)}；不自动延长已过期合同。
@@ -2725,7 +2610,7 @@ export default function UpstreamProcurementPage() {
                 <div className="grid gap-3 md:grid-cols-4">
                   <Field label="供应商">
                     <input type="search" aria-label="搜索合同供应商" disabled={Boolean(contractCopy)} placeholder="输入供应商名称或编号" value={contractSupplierQuery} onChange={event => setContractSupplierQuery(event.target.value)} className="input mb-2" />
-                    <select aria-label="合同供应商" disabled={Boolean(contractCopy)} className="input" value={contractSupplierId} onChange={(event) => void loadSources(event.target.value)}>
+                    <select aria-label="合同供应商" disabled={Boolean(contractCopy)} className="input" value={contractSupplierId} onChange={(event) => setContractSupplierId(event.target.value)}>
                       <option value="">请选择</option>
                       {suppliers.filter(supplier => supplier.id === contractSupplierId || `${supplier.no} ${supplier.name}`.toLowerCase().includes(contractSupplierQuery.trim().toLowerCase())).map((supplier) => (
                         <option key={supplier.id} value={supplier.id}>
@@ -2777,61 +2662,9 @@ export default function UpstreamProcurementPage() {
                     />
                   </Field>
                 </div>
-                <div className="mt-4 overflow-x-auto">
-                  <table className="w-full text-caption">
-                    <thead>
-                      <tr className="border-b text-left">
-                        <th className="p-2">商品</th>
-                        <th className="p-2">采购单位</th>
-                        <th className="p-2">库存换算</th>
-                        <th className="p-2">{contractCopy ? `${contractCopy.taxInclusive ? '含税' : '不含税'}单价（全部保留）` : '含税单价（留空不纳入）'}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {sources.map((source) => (
-                        <tr key={source.id} className="border-b border-border">
-                          <td className="p-2">
-                            <b>{source.product.name}</b>
-                            <div className="text-gray3">
-                              {source.product.code} · {source.product.spec || '—'}
-                            </div>
-                          </td>
-                          <td className="p-2">{source.purchaseUnit}</td>
-                          <td className="p-2">
-                            1 {source.purchaseUnit} = {String(source.inventoryUnitsPerPurchaseUnit)} {source.product.inventoryUnit || source.product.unit}
-                          </td>
-                          <td className="p-2">
-                            <input
-                              className="input w-36"
-                              aria-label={`${source.product.name}合同单价`}
-                              disabled={contractCopyPending}
-                              type="number"
-                              onWheel={event => event.currentTarget.blur()}
-                              min="0"
-                              step="0.01"
-                              value={sourcePrices[source.id] || ''}
-                              onChange={(event) =>
-                                setSourcePrices((value) => ({
-                                  ...value,
-                                  [source.id]: event.target.value,
-                                }))
-                              }
-                            />
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                  {contractSupplierId && sources.length === 0 && (
-                    <p className="p-4 text-caption text-gray3">
-                      该供应商尚未绑定可采购商品，
-                      <a href="/v2/supply-chain/suppliers" className="text-accent underline">
-                        去供应商管理维护供货商品与价格
-                      </a>
-                      。
-                    </p>
-                  )}
-                </div>
+                <Field label="合同附件（图片或 PDF，可多选）">
+                  <input type="file" multiple accept="image/jpeg,image/png,image/webp,image/gif,application/pdf" onChange={event => { setContractFiles(Array.from(event.target.files || []).slice(0, 20)); setContractUploadedFiles([]) }} className="block w-full text-caption" />
+                </Field>
                 <div className="mt-4 flex justify-end">
                   <ActionButton onClick={() => void createContract()} disabled={working === 'create-contract' || contractCopyLoading || Boolean(contractCopy && sources.length === 0)}>
                     {contractCopyPending ? '核对并重试原创建' : contractCopy ? '保存新版合同草稿' : '保存合同草稿'}
@@ -2839,10 +2672,10 @@ export default function UpstreamProcurementPage() {
                 </div>
               </Panel>
             )}
-            {contracts.length === 0 ? (
+            {contracts.filter(contract => !archiveSupplierId || contract.supplierId === archiveSupplierId).length === 0 ? (
               <Empty text="暂无合同" />
             ) : (
-              contracts.map((contract) => (
+              contracts.filter(contract => !archiveSupplierId || contract.supplierId === archiveSupplierId).map((contract) => (
                 <article id={`contract-${contract.id}`} key={contract.id} className="rounded-2xl border border-border bg-white p-4">
                   <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                     <div>
@@ -2865,11 +2698,10 @@ export default function UpstreamProcurementPage() {
                         />
                       </div>
                       <p className="mt-1 text-caption text-gray2">
-                        {contract.supplier.name} · V{contract.version} · {contract.lines.length} 个商品 · {shortDate(contract.startsAt)} 起
+                        {contract.supplier.name} · V{contract.version} · {shortDate(contract.startsAt)} 起
                       </p>
                     </div>
                     <div className="flex gap-2">
-                      {contract.status === 'ACTIVE' && <ActionButton onClick={() => void openContractCopy(contract)} disabled={Boolean(working) || showContractForm || showOrderForm || contractCopyRecoveryBlocked}>复制新版改价</ActionButton>}
                       {contract.status === 'DRAFT' && (
                         <ActionButton onClick={() => confirmContractActivation(contract)} disabled={working === contract.id}>
                           启用合同
@@ -2945,27 +2777,15 @@ function contractSettlementText(contract: Contract) {
   return contract.settlementDays > 0 ? `${cycle} · ${contract.settlementDays} 天` : cycle
 }
 
-function Summary({ label, value, danger }: { label: string; value: number; danger?: boolean }) {
-  return (
-    <div className="rounded-2xl border border-border bg-white p-4">
-      <div className="text-caption text-gray3">{label}</div>
-      <div className={`mt-1 text-[28px] font-bold ${danger ? 'text-red-700' : 'text-gray1'}`}>{value}</div>
-    </div>
-  )
-}
-
 function Empty({ text, actionLabel, onAction }: { text: string; actionLabel?: string; onAction?: () => void }) {
   const next = (
     {
-      还没有上游采购单: { label: '先建立合同', href: '?tab=contracts' },
+      还没有上游采购单: { label: '新建采购单', href: '?tab=orders' },
       暂无待验收单据: { label: '查看采购与发货', href: '?tab=orders' },
       暂无采购退货单: { label: '查看已入账收货', href: '?tab=receipts' },
       暂无到货差异: { label: '查看收货单', href: '?tab=receipts' },
       暂无对账单: { label: '在上方生成对账单', href: '?tab=settlements' },
-      暂无合同: {
-        label: '先维护商品供货关系',
-        href: '/v2/supply-chain/products',
-      },
+      暂无合同: { label: '查看供应商', href: '/v2/supply-chain/suppliers' },
     } as Record<string, { label: string; href: string }>
   )[text]
   return (

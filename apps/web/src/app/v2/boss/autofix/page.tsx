@@ -47,14 +47,14 @@ export default function AutoFixRunsPage() {
     <div className="min-h-screen bg-bg pb-12">
       <header className="px-4 pt-4 pb-3 flex items-center gap-3 border-b border-border">
         <button
-          onClick={() => { location.href = '/v2/boss/feedback' }}
+          onClick={() => { location.href = '/v2/boss/home' }}
           className="w-9 h-9 rounded-full bg-white border border-border flex items-center justify-center"
         >
           ‹
         </button>
         <div>
           <h1 className="text-h1">AI 自动修复</h1>
-          <p className="text-caption text-gray3">手机批准反馈后，自动开发、验证和安全发布</p>
+          <p className="text-caption text-gray3">历史自动修复记录</p>
         </div>
       </header>
 

@@ -131,10 +131,10 @@ describe('总仓库存页面', () => {
       }
       if (url.startsWith('/api/warehouse-inventory/purchase-inbound-price-history')) return Promise.resolve({ items: [] })
       if (url === '/api/warehouse-inventory/manual-inbound' && init?.method === 'POST') {
-        return Promise.resolve({ replayed: false, gateWarnings: [] })
+        return Promise.resolve({ replayed: false, gateWarnings: [], doc: { id: 'submitted-single-doc' } })
       }
       if (url === '/api/warehouse-inventory/batch-manual-inbound' && init?.method === 'POST') {
-        return Promise.resolve({ replayed: false, count: 1, totalAmount: 160, gateWarnings: [] })
+        return Promise.resolve({ replayed: false, count: 1, totalAmount: 160, gateWarnings: [], doc: { id: 'submitted-batch-doc' } })
       }
       return Promise.reject(new Error(`unexpected API: ${url}`))
     })
@@ -187,11 +187,11 @@ describe('总仓库存页面', () => {
     await waitFor(() => container.textContent?.includes('菌菇酱') ?? false)
 
     expect(container.textContent).toContain('影子账观察期')
-    expect(container.textContent).toContain('总仓维度 · 不按供应商拆库存')
+    expect(container.textContent).toContain('总仓库存')
     expect(container.textContent).toContain('1 箱 = 8 袋')
     expect(container.textContent).toContain('采购规格')
     expect(container.textContent).toContain('库存单位')
-    expect(container.textContent).toContain('待采购映射 79')
+    expect(container.textContent).not.toContain('待采购映射')
     expect(container.textContent).not.toContain('采购→库存单位')
     expect(container.textContent).toContain('库存四账审计：1 项待处理')
     expect(container.textContent).not.toContain('选择供应商')
@@ -407,7 +407,7 @@ describe('总仓库存页面', () => {
     change(numberInputs[2], '160')
 
     // 未选供应商时前端拦截，不发请求
-    const submit = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('提交审核并入库'))
+    const submit = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('提交审核'))
     await act(async () => { submit?.click() })
     expect(container.textContent).toContain('请选择供货供应商')
     expect(mockFetch.mock.calls.some(([path]) => String(path) === '/api/warehouse-inventory/manual-inbound')).toBe(false)
@@ -419,6 +419,7 @@ describe('总仓库存页面', () => {
 
     await act(async () => { submit?.click() })
     await waitFor(() => mockFetch.mock.calls.some(([path]) => String(path) === '/api/warehouse-inventory/manual-inbound'))
+    await waitFor(() => container.textContent?.includes('已提交审核，复审后入库') ?? false)
 
     const call = mockFetch.mock.calls.find(([path]) => String(path) === '/api/warehouse-inventory/manual-inbound')
     expect(JSON.parse(String(call?.[1]?.body))).toMatchObject({
@@ -441,7 +442,7 @@ describe('总仓库存页面', () => {
       if (url === '/api/upload?category=warehouse-docs' && init?.method === 'POST') return Promise.resolve({
         key: 'warehouse-docs/tenant-1/delivery.pdf', name: '供应商送货单.pdf', mime: 'application/pdf', size: 2048, url: 'https://signed.test/delivery.pdf',
       })
-      if (url === '/api/warehouse-inventory/manual-inbound' && init?.method === 'POST') return Promise.resolve({ replayed: false, gateWarnings: [] })
+      if (url === '/api/warehouse-inventory/manual-inbound' && init?.method === 'POST') return Promise.resolve({ replayed: false, gateWarnings: [], doc: { id: 'submitted-single-doc' } })
       return Promise.reject(new Error(`unexpected API: ${url}`))
     })
     const { container, root } = renderPage()
@@ -460,7 +461,7 @@ describe('总仓库存页面', () => {
     await act(async () => { fileInput.dispatchEvent(new Event('change', { bubbles: true })) })
     await waitFor(() => container.textContent?.includes('供应商送货单.pdf') ?? false)
 
-    await act(async () => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '提交审核并入库')?.click())
+    await act(async () => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '提交审核')?.click())
     await waitFor(() => mockFetch.mock.calls.some(([path]) => String(path) === '/api/warehouse-inventory/manual-inbound'))
     const call = mockFetch.mock.calls.find(([path]) => String(path) === '/api/warehouse-inventory/manual-inbound')
     expect(JSON.parse(String(call?.[1]?.body)).attachments).toEqual([{
@@ -607,7 +608,7 @@ describe('总仓库存页面', () => {
     pickSupplier(container)
     expect(container.textContent).toContain('2 箱 = 16 袋')
     expect(container.textContent).toContain('¥400.00')
-    const submit = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('提交审核并批量入库'))
+    const submit = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('提交审核'))
     await act(async () => { submit?.click() })
     await waitFor(() => mockFetch.mock.calls.some(([path]) => String(path) === '/api/warehouse-inventory/batch-manual-inbound'))
 
@@ -896,7 +897,7 @@ describe('总仓库存页面', () => {
     expect(Number(priceInput.value)).toBeCloseTo(83.333333, 5)
 
     pickSupplier(container)
-    const submit = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('提交审核并批量入库'))
+    const submit = Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('提交审核'))
     await act(async () => { submit?.click() })
     await waitFor(() => mockFetch.mock.calls.some(([path]) => String(path) === '/api/warehouse-inventory/batch-manual-inbound'))
 

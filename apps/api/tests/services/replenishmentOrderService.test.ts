@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
+vi.mock('../../src/services/replenishmentStockReservation', async () => {
+  const actual: any = await vi.importActual('../../src/services/replenishmentStockReservation')
+  return { ...actual, transferReplenishmentStock: vi.fn().mockResolvedValue(true) }
+})
+import { transferReplenishmentStock } from '../../src/services/replenishmentStockReservation'
 import { acceptReplenishmentInTransaction } from '../../src/services/replenishmentOrderService'
+import { REPLENISHMENT_SUBMISSION_POLICY } from '../../src/services/replenishmentStockReservation'
 
 function fakeTransaction(options: { casCount?: number; replay?: boolean } = {}) {
   const product = {
@@ -11,10 +17,10 @@ function fakeTransaction(options: { casCount?: number; replay?: boolean } = {}) 
   const replenishment = {
     id: 'replenishment-1', tenantId: 'tenant-a', no: 'RO202609000001',
     storeId: 'store-a', supplierId: 'supplier-a', expectedDate: new Date('2026-09-30'),
-    totalAmount: '100.00', status: 'SUBMITTED', note: '加急', submittedAt: new Date('2026-09-28'),
+    totalAmount: '100.00', status: 'SUBMITTED', note: '加急', submittedAt: new Date('2026-09-28'), stockReservationPolicy: REPLENISHMENT_SUBMISSION_POLICY,
     createdById: 'creator-a', rowVersion: 1, fulfillment: null,
     store: { id: 'store-a', name: '门店A' },
-    supplier: { id: 'supplier-a', name: '供应商A', sourceType: null, inventoryMode: 'NOT_TRACKED' },
+    supplier: { id: 'supplier-a', name: '总仓', sourceType: 'HEADQ_WAREHOUSE', inventoryMode: 'NOT_TRACKED' },
     createdBy: { id: 'creator-a', name: '供应链A', role: 'SUPPLY_CHAIN' },
     items: [{
       id: 'replenishment-item-1', productId: product.id, quantity: '10', unitPrice: '10', amount: '100',
@@ -43,7 +49,7 @@ function fakeTransaction(options: { casCount?: number; replay?: boolean } = {}) 
   const link = { id: 'link-1', tenantId: 'tenant-a', replenishmentOrderId: replenishment.id, purchaseOrderId: createdPurchaseOrder.id }
   const tx: any = {
     replenishmentOrderEvent: {
-      findFirst: vi.fn().mockResolvedValue(options.replay ? { replenishmentOrderId: replenishment.id } : null),
+      findFirst: vi.fn().mockResolvedValue(options.replay ? { replenishmentOrderId: replenishment.id, eventType: 'ACCEPTED' } : null),
       create: vi.fn().mockResolvedValue({}),
     },
     replenishmentFulfillmentLink: {
@@ -75,6 +81,14 @@ const input = {
 }
 
 describe('replenishment acceptance transaction', () => {
+  it('does not reject new-policy acceptance because all available stock is already held by this request', async () => {
+    const { tx, replenishment } = fakeTransaction()
+    Object.assign(replenishment, { stockReservationPolicy: 'SUBMISSION_V1' })
+    await acceptReplenishmentInTransaction(tx, input)
+    expect(tx.$queryRaw).not.toHaveBeenCalled()
+    expect(transferReplenishmentStock).toHaveBeenCalledWith(tx, expect.objectContaining({ tenantId: input.tenantId, replenishmentOrderId: input.replenishmentOrderId, purchaseOrderId: 'purchase-order-1' }))
+  })
+
   it('atomically CASes the request and creates one formal confirmed PO, link and audit event', async () => {
     const { tx } = fakeTransaction()
     const result = await acceptReplenishmentInTransaction(tx, input)
@@ -107,6 +121,18 @@ describe('replenishment acceptance transaction', () => {
   it('rejects a concurrent loser when the submitted rowVersion CAS no longer wins', async () => {
     const { tx } = fakeTransaction({ casCount: 0 })
     await expect(acceptReplenishmentInTransaction(tx, input)).rejects.toMatchObject({ statusCode: 409 })
+    expect(tx.replenishmentOrder.updateMany).toHaveBeenCalledTimes(1)
+    expect(tx.purchaseOrder.create).not.toHaveBeenCalled()
+    expect(tx.replenishmentFulfillmentLink.create).not.toHaveBeenCalled()
+  })
+
+  it('rejects a non-warehouse source before attempting acceptance', async () => {
+    const { tx, replenishment } = fakeTransaction()
+    replenishment.supplier.sourceType = 'STORE_FULFILLER'
+    await expect(acceptReplenishmentInTransaction(tx, input)).rejects.toMatchObject({
+      statusCode: 409, message: '补货单只支持总仓向门店补货，原记录保留，请核对来源',
+    })
+    expect(tx.replenishmentOrder.updateMany).not.toHaveBeenCalled()
     expect(tx.purchaseOrder.create).not.toHaveBeenCalled()
     expect(tx.replenishmentFulfillmentLink.create).not.toHaveBeenCalled()
   })
@@ -114,6 +140,13 @@ describe('replenishment acceptance transaction', () => {
   it('rejects reuse of an acceptance idempotency key for another replenishment order', async () => {
     const { tx } = fakeTransaction({ replay: true })
     tx.replenishmentOrderEvent.findFirst.mockResolvedValue({ replenishmentOrderId: 'another-order' })
+    await expect(acceptReplenishmentInTransaction(tx, input)).rejects.toMatchObject({ statusCode: 409 })
+    expect(tx.replenishmentFulfillmentLink.findUnique).not.toHaveBeenCalled()
+  })
+
+  it('rejects a prior submission key even when this request already has a formal PO', async () => {
+    const { tx, replenishment } = fakeTransaction({ replay: true })
+    tx.replenishmentOrderEvent.findFirst.mockResolvedValue({ replenishmentOrderId: replenishment.id, eventType: 'SUBMITTED' })
     await expect(acceptReplenishmentInTransaction(tx, input)).rejects.toMatchObject({ statusCode: 409 })
     expect(tx.replenishmentFulfillmentLink.findUnique).not.toHaveBeenCalled()
   })

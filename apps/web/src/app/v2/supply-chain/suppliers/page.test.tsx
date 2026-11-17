@@ -6,6 +6,7 @@ import { createRoot } from 'react-dom/client'
 import { Simulate } from 'react-dom/test-utils'
 
 import SuppliersPage from './page'
+import { SupplierManager } from './supplier-manager'
 import { SENSITIVE_SUPPLIER_FIELDS } from '@/lib/supply-supplier-pc'
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
@@ -174,6 +175,7 @@ describe('上游供应商管理 PC 页面', () => {
     expect(container.textContent).toContain('张三')
     expect(container.textContent).toContain('13800138000')
     expect(container.textContent).toContain('30 天')
+    expect(container.querySelector('a[href="/v2/supply-chain/suppliers/sup-1/edit"]')?.textContent).toContain('编辑档案')
 
     expect(container.textContent).toContain('SUP002')
     expect(container.textContent).toContain('大理水产')
@@ -230,7 +232,7 @@ describe('上游供应商管理 PC 页面', () => {
     cleanup(container, root)
   })
 
-  it('点击列表行展示详情区，供货关系入口指向供货商品管理页', async () => {
+  it('总览占满页面，点击供应商进入独立详情页', async () => {
     mockFetch.mockResolvedValue(SUPPLIERS)
 
     const { container, root } = render(<SuppliersPage />)
@@ -239,14 +241,9 @@ describe('上游供应商管理 PC 页面', () => {
     const row = Array.from(container.querySelectorAll('tr')).find(
       tr => tr.textContent?.includes('昆明蔬菜批发'),
     )!
-    act(() => { Simulate.click(row) })
-
-    await waitFor(() => container.textContent?.includes('供应商档案'))
-    expect(container.textContent).toContain('供货关系')
-    const link = Array.from(container.querySelectorAll('a')).find(
-      a => a.textContent?.includes('管理供货商品'),
-    )
-    expect(link?.getAttribute('href')).toBe(`/v2/supply-chain/suppliers/${SUPPLIERS[0].id}/products`)
+    const link = Array.from(row.querySelectorAll('a')).find(a => a.textContent?.includes('昆明蔬菜批发'))
+    expect(link?.getAttribute('href')).toBe(`/v2/supply-chain/suppliers/${SUPPLIERS[0].id}`)
+    expect(container.querySelector('aside')).toBeNull()
 
     cleanup(container, root)
   })
@@ -403,16 +400,12 @@ describe('上游供应商管理 PC 页面', () => {
 
     await waitFor(() => container.textContent?.includes('上游供应商新增成功') ?? false)
     expect(methodCalls('GET', '/api/suppliers').length).toBeGreaterThanOrEqual(2)
-    await waitFor(() =>
-      Array.from(container.querySelectorAll('tr')).some(
-        row => row.textContent?.includes('曲靖肉禽') && row.className.includes('bg-accent/5'),
-      ),
-    )
+    await waitFor(() => container.textContent?.includes('上游供应商新增成功，已绑定 1 个供货商品') ?? false)
 
     cleanup(container, root)
   })
 
-  it('点击编辑档案打开抽屉，保存后发起 PATCH 并刷新列表', async () => {
+  it('编辑档案独立页面保存后发起 PATCH 并刷新资料', async () => {
     const updated = { ...SUPPLIERS[0], name: '昆明蔬菜批发（新名）', creditDays: 60 }
     mockFetch.mockImplementation((path, init) => {
       const method = (init?.method ?? 'GET').toUpperCase()
@@ -420,17 +413,9 @@ describe('上游供应商管理 PC 页面', () => {
       return Promise.resolve(SUPPLIERS)
     })
 
-    const { container, root } = render(<SuppliersPage />)
-    await waitFor(() => container.textContent?.includes('昆明蔬菜批发') ?? false)
-
-    const row = Array.from(container.querySelectorAll('tr')).find(
-      tr => tr.textContent?.includes('昆明蔬菜批发'),
-    )!
-    act(() => { Simulate.click(row) })
-    await waitFor(() => container.textContent?.includes('供应商档案') ?? false)
-
-    act(() => findButton(container, '编辑档案')?.click())
+    const { container, root } = render(<SupplierManager editSupplierId="sup-1" />)
     await waitFor(() => document.body.textContent?.includes('编辑上游供应商档案') ?? false)
+    expect(container.querySelector('[role="region"][aria-label="编辑上游供应商档案"]')).not.toBeNull()
 
     const nameInput = getInputByLabel(container, '名称') as HTMLInputElement
     expect(nameInput.value).toBe('昆明蔬菜批发')
@@ -450,6 +435,41 @@ describe('上游供应商管理 PC 页面', () => {
 
     await waitFor(() => container.textContent?.includes('档案已更新') ?? false)
 
+    cleanup(container, root)
+  })
+
+  it('编辑档案独立页面可直接上传合同与资质图片，分别保存到原有档案', async () => {
+    mockFetch.mockImplementation((path, init) => {
+      const method = (init?.method ?? 'GET').toUpperCase()
+      if (String(path) === '/api/suppliers/sup-1/archive' && method === 'GET') return Promise.resolve({ sections: { contracts: { count: 0 }, qualifications: { count: 0 }, finance: { count: 0 }, invoice: { count: 0 } } })
+      if (String(path).startsWith('/api/upload') && method === 'POST') return Promise.resolve({ key: 'test-image', name: '资料.png', mime: 'image/png', size: 3 })
+      if (method === 'POST') return Promise.resolve({ id: 'saved' })
+      return Promise.resolve(SUPPLIERS)
+    })
+    const { container, root } = render(<SupplierManager editSupplierId="sup-1" />)
+    await waitFor(() => Boolean(container.querySelector('[role="region"][aria-label="编辑上游供应商档案"]')))
+    const dialog = container.querySelector('[role="region"][aria-label="编辑上游供应商档案"]') as HTMLElement
+    expect(dialog.className).not.toContain('fixed')
+    expect(dialog.textContent).toContain('合同档案')
+    expect(dialog.textContent).toContain('企业资质')
+
+    act(() => {
+      setInputValue(dialog.querySelector('[aria-label="合同编号"]') as HTMLInputElement, 'HT001')
+      setInputValue(dialog.querySelector('[aria-label="合同名称"]') as HTMLInputElement, '供货合同')
+      setInputValue(dialog.querySelector('[aria-label="合同生效日"]') as HTMLInputElement, '2026-11-16')
+      Simulate.change(dialog.querySelector('[aria-label="合同图片或PDF"]') as HTMLInputElement, { target: { files: [new File(['img'], '合同.png', { type: 'image/png' })] } as any })
+    })
+    act(() => findButton(container, '保存合同草稿')?.click())
+    await waitFor(() => methodCalls('POST', '/api/upstream/contracts').length === 1)
+    expect(lastCallBody('/api/upstream/contracts', 'POST')).toMatchObject({ supplierId: 'sup-1', contractNo: 'HT001', title: '供货合同', attachments: [{ key: 'test-image' }] })
+
+    act(() => {
+      setInputValue(dialog.querySelector('[aria-label="资质名称"]') as HTMLInputElement, '营业执照')
+      Simulate.change(dialog.querySelector('[aria-label="资质图片或PDF"]') as HTMLInputElement, { target: { files: [new File(['img'], '执照.png', { type: 'image/png' })] } as any })
+    })
+    act(() => findButton(container, '添加资质')?.click())
+    await waitFor(() => methodCalls('POST', '/api/suppliers/sup-1/archive').length === 1)
+    expect(lastCallBody('/api/suppliers/sup-1/archive', 'POST')).toMatchObject({ section: 'QUALIFICATION', title: '营业执照', attachment: { key: 'test-image' } })
     cleanup(container, root)
   })
 
@@ -550,9 +570,8 @@ describe('上游供应商管理 PC 页面', () => {
     act(() => findButton(container, '保存')?.click())
 
     await waitFor(() => methodCalls('POST', '/api/suppliers/create-with-products').length === 1)
-    expect(lastCallBody('/api/suppliers/create-with-products', 'POST')).toMatchObject({ items: [{ productId: 'p-1', purchaseUnit: '箱', inventoryUnitsPerPurchaseUnit: 10, quotedUnitPrice: 30, isPrimary: false }] })
-    await waitFor(() => container.textContent?.includes('已绑定 1 个供货商品') ?? false)
-    expect(container.textContent).toContain('已绑定 1 个供货商品')
+    expect(lastCallBody('/api/suppliers/create-with-products', 'POST')).toMatchObject({ items: [{ productId: 'p-1', purchaseUnit: '箱', inventoryUnitsPerPurchaseUnit: 10, quotedUnitPrice: null, isPrimary: false }] })
+    await waitFor(() => container.textContent?.includes('上游供应商新增成功，已绑定 1 个供货商品') ?? false)
     cleanup(container, root)
   })
   it('未选商品或缺换算时保留表单，不创建半完成供应商', async () => {
@@ -607,7 +626,7 @@ describe('上游供应商管理 PC 页面', () => {
     await waitFor(() => document.body.textContent?.includes('上次创建结果待确认') ?? false)
     expect(getInputByLabel(view.container, '名称').value).toBe('恢复原请求')
     act(() => findButton(view.container, '保存')?.click())
-    await waitFor(() => view.container.textContent?.includes('已绑定 1 个供货商品') ?? false)
+    await waitFor(() => view.container.textContent?.includes('上游供应商新增成功，已绑定 1 个供货商品') ?? false)
     expect(lastCallBody('/api/suppliers/create-with-products', 'POST')).toEqual(first)
     expect(Object.keys(localStorage).some(key => key.startsWith('dj:supplier-create:'))).toBe(false)
     cleanup(view.container, view.root)

@@ -60,7 +60,7 @@ export type UpstreamSettlementStatus = typeof UPSTREAM_SETTLEMENT_STATUSES[numbe
 type TransitionMap<T extends string> = Readonly<Record<T, readonly T[]>>
 
 const purchaseOrderTransitions: TransitionMap<UpstreamPurchaseOrderStatus> = {
-  DRAFT: ['PENDING_APPROVAL', 'CANCELLED'],
+  DRAFT: ['PENDING_APPROVAL', 'SUBMITTED_TO_SUPPLIER', 'CANCELLED'],
   PENDING_APPROVAL: ['DRAFT', 'SUBMITTED_TO_SUPPLIER', 'CANCELLED'],
   SUBMITTED_TO_SUPPLIER: ['CHANGE_PROPOSED', 'SUPPLIER_ACCEPTED', 'CANCELLED'],
   CHANGE_PROPOSED: ['SUBMITTED_TO_SUPPLIER', 'SUPPLIER_ACCEPTED', 'CANCELLED'],

@@ -21,6 +21,7 @@ function originalMovement(overrides: Record<string, unknown> = {}) {
     sourceType: 'DeliveryOrder',
     sourceId: 'do-1',
     physicalDelta: new Prisma.Decimal(-1000),
+    valueDelta: new Prisma.Decimal(-2500),
     inventoryQuantity: new Prisma.Decimal(1000),
     originalQuantity: new Prisma.Decimal(100),
     originalUnit: '箱',
@@ -63,7 +64,7 @@ function buildTx(options: {
         return null
       }),
       aggregate: vi.fn().mockResolvedValue({
-        _sum: { inventoryQuantity: options.priorReversedQty ? new Prisma.Decimal(options.priorReversedQty) : null },
+        _sum: { inventoryQuantity: options.priorReversedQty ? new Prisma.Decimal(options.priorReversedQty) : null, valueDelta: null },
       }),
       create: movementCreate,
     },

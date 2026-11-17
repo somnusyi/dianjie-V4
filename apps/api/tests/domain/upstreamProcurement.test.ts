@@ -13,6 +13,7 @@ import {
 
 describe('upstream procurement state machines', () => {
   it('supports the normal purchase-order lifecycle and blocks skipping supplier acceptance', () => {
+    assertUpstreamPurchaseOrderTransition('DRAFT', 'SUBMITTED_TO_SUPPLIER')
     assertUpstreamPurchaseOrderTransition('DRAFT', 'PENDING_APPROVAL')
     assertUpstreamPurchaseOrderTransition('PENDING_APPROVAL', 'SUBMITTED_TO_SUPPLIER')
     assertUpstreamPurchaseOrderTransition('SUBMITTED_TO_SUPPLIER', 'SUPPLIER_ACCEPTED')

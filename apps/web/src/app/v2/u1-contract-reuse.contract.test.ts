@@ -11,11 +11,10 @@ describe('U-1 合同复用与下单直通', () => {
     expect(schema).toContain('contract  UpstreamSupplierContract?')
   })
 
-  it('唯一生效合同自动带出，只有多份时显示选择器', () => {
-    expect(page).toContain('supplierActiveContracts.length === 1')
-    expect(page).toContain('supplierActiveContracts.length > 1')
-    expect(page).toContain('已自动带出合同')
-    expect(page).toContain('已生效合同（多份请选）')
+  it('按本单价格发起采购，保留历史采购单的合同关系', () => {
+    expect(page).toContain('/api/upstream/purchase-orders/direct')
+    expect(schema).toMatch(/contractId\s+String\?/)
+    expect(schema).toMatch(/contractLineId\s+String\?/)
   })
 
   it('无合同时在采购单内快速创建并带出供货价', () => {
@@ -28,7 +27,7 @@ describe('U-1 合同复用与下单直通', () => {
   it('合同启用使用 ConfirmSheet，无货源可直达商品供货关系', () => {
     expect(page).toContain('onClick={() => confirmContractActivation(contract)}')
     expect(page).not.toContain('window.confirm(\n                              "确认合同价格及换算无误并正式启用？"')
-    expect(page).toContain('去商品管理维护供货关系与价格')
+    expect(page).toContain('去商品管理维护供应商与价格')
   })
 
   it('切换供应商时只接受最后一次货源响应', () => {

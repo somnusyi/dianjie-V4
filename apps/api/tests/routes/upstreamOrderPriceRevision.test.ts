@@ -34,6 +34,25 @@ beforeEach(() => {
 const propose = (payload: any = { rowVersion: 2, reason: '本单涨价申请', lines: [{ lineId: 'line-a', quantity: 3, unitPrice: 10.123456 }] }, headers: any = {}) => app.inject({ method: 'POST', url: '/api/upstream/purchase-orders/order-a/propose-change', payload, headers })
 const review = (payload: any = { rowVersion: 3, decision: 'ACCEPT' }, headers: any = { 'x-role': 'SUPPLY_CHAIN' }) => app.inject({ method: 'POST', url: '/api/upstream/purchase-orders/order-a/revisions/revision-a/review', payload, headers })
 describe('supplier order price request and internal review', () => {
+  it('automatically accepts a pure unit-price decrease and keeps an audit revision', async () => {
+    const response = await propose({ rowVersion: 2, reason: '本批降价', lines: [{ lineId: 'line-a', quantity: 3, unitPrice: 9.5 }] })
+    expect(response.statusCode).toBe(201)
+    expect(response.json()).toMatchObject({ status: 'ACCEPTED', reviewNote: '降价自动通过' })
+    expect(order.status).toBe('SUPPLIER_ACCEPTED')
+    expect(order.totalAmount.toString()).toBe('28.5')
+    expect(mocks.updateLine.mock.calls[0][0].data.unitPrice.toString()).toBe('9.5')
+    expect(mocks.event.mock.calls[0][0].data.action).toBe('AUTO_ACCEPT_DECREASE')
+    expect((await review()).statusCode).toBe(409)
+  })
+  it('does not auto-approve a price increase or a quantity change', async () => {
+    expect((await propose({ rowVersion: 2, reason: '涨价', lines: [{ lineId: 'line-a', quantity: 3, unitPrice: 11 }] })).json().status).toBe('PENDING')
+    expect(mocks.updateLine).not.toHaveBeenCalled()
+  })
+  it('supplier cannot change quantity or arrival date through the price request', async () => {
+    expect((await propose({ rowVersion: 2, reason: '改数量', lines: [{ lineId: 'line-a', quantity: 4, unitPrice: 9 }] })).statusCode).toBe(400)
+    expect((await propose({ rowVersion: 2, reason: '改日期', expectedArrivalAt: '2026-11-20', lines: [{ lineId: 'line-a', quantity: 3, unitPrice: 9 }] })).statusCode).toBe(400)
+    expect(mocks.createRevision).not.toHaveBeenCalled()
+  })
   it('proposal keeps old order prices; internal approval alone updates six-place price and four-place amount once', async () => {
     expect((await propose()).statusCode).toBe(201)
     expect(mocks.findOrder.mock.calls[0][0].where).toMatchObject({ tenantId: 'tenant-a', supplierId: 'supplier-a', id: 'order-a' })

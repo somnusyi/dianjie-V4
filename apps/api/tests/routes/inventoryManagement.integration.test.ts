@@ -39,6 +39,11 @@ describe('inventory management with real PostgreSQL', () => {
       itemCount: 1, countedCount: 1, differenceCount: 1, totalBookValue: 100, totalCountedValue: 90, totalDifferenceValue: -10, confirmedAt: new Date(date),
       items: { create: { productId, productCodeSnapshot: 'MGMT-01', productNameSnapshot: '验证土豆', unitSnapshot: 'kg', bookQuantity: 10, countedQuantity: 9, averageUnitCost: 10, differenceQuantity: -1, differenceAmount: -10, sortOrder: 0 } },
     } })
+    await prisma.warehouseStocktake.create({ data: {
+      tenantId, warehouseId, no: 'WCOUNT-MGMT', countDate: new Date('2026-09-22T00:00:00Z'), status: 'CONFIRMED',
+      reviewStatus: 'UNREVIEWED', auditedAt: new Date(date), auditedById: userId, createdById: userId, requestKey: randomUUID(),
+      itemCount: 1, countedCount: 1, differenceCount: 1, totalBookValue: 80, totalCountedValue: 85, totalDifferenceValue: 5,
+    } })
     await app.register(jwt, { secret: 'management-postgres-integration-secret' })
     app.decorate('authenticate', async (req: any) => req.jwtVerify())
     await app.register(inventoryManagementRoutes, { prefix: '/api/inventory-management' })
@@ -59,6 +64,7 @@ describe('inventory management with real PostgreSQL', () => {
     await prisma.warehouseLedgerLot.deleteMany({ where: { tenantId } })
     await prisma.warehouseLedgerMovement.deleteMany({ where: { tenantId } })
     await prisma.warehouseLedgerBalance.deleteMany({ where: { tenantId } })
+    await prisma.warehouseStocktake.deleteMany({ where: { tenantId } })
     await prisma.opLog.deleteMany({ where: { tenantId } })
     await prisma.businessSequence.deleteMany({ where: { tenantId } })
     await prisma.product.deleteMany({ where: { tenantId } })
@@ -75,14 +81,19 @@ describe('inventory management with real PostgreSQL', () => {
     expect(inbound.statusCode, inbound.body).toBe(200)
     const replay = await app.inject({ method: 'POST', url: '/api/warehouse-inventory/manual-inbound', headers: headers(), payload })
     expect([200, 201]).toContain(replay.statusCode)
+    expect(replay.json().doc.id).toBe(inbound.json().doc.id)
+    expect((await app.inject({ method: 'POST', url: `/api/warehouse-docs/${inbound.json().doc.id}/confirm`, headers: headers() })).statusCode).toBe(200)
+    expect((await app.inject({ method: 'POST', url: `/api/warehouse-docs/${inbound.json().doc.id}/review`, headers: headers() })).statusCode).toBe(200)
     const outbound = await app.inject({ method: 'POST', url: '/api/warehouse-inventory/batch-manual-outbound', headers: headers(), payload: { items: [{ productId, inventoryQuantity: 5 }], effectiveAt: date, idempotencyKey: randomUUID(), purpose: 'SAMPLE_ISSUE', reason: '本地联调领用' } })
     expect(outbound.statusCode, outbound.body).toBe(200)
+    expect((await app.inject({ method: 'POST', url: `/api/warehouse-docs/${outbound.json().doc.id}/confirm`, headers: headers() })).statusCode).toBe(200)
+    expect((await app.inject({ method: 'POST', url: `/api/warehouse-docs/${outbound.json().doc.id}/review`, headers: headers() })).statusCode).toBe(200)
     const balance = await prisma.warehouseLedgerBalance.findUniqueOrThrow({ where: { tenantId_warehouseId_productId: { tenantId, warehouseId, productId } } })
     expect(Number(balance.physicalQty)).toBe(15); expect(Number(balance.inventoryValue)).toBe(150)
     expect(await prisma.warehouseLedgerMovement.count({ where: { tenantId } })).toBe(2)
     const inRows = (await get('other-in')).json().rows; const outRows = (await get('other-out')).json().rows
     expect(inRows).toHaveLength(1); expect(outRows).toHaveLength(1)
-    expect(inRows[0]).toMatchObject({ amount: 200, warehouse: '验证总仓', creator: '验证操作员', status: '未审核', source: '其他入库', attachments: '0 项' })
+    expect(inRows[0]).toMatchObject({ amount: 200, warehouse: '验证总仓', creator: '验证操作员', status: '已审核', review: '已复审', source: '其他入库', attachments: '0 项' })
     expect(outRows[0]).toMatchObject({ amount: 50, reason: '【样品领用】本地联调领用' })
     inboundNo = inRows[0].no; outboundNo = outRows[0].no
     expect((await get('limits')).json().rows[0]).toMatchObject({ currentQty: 15, unit: 'kg', minQty: null, safeQty: null })
@@ -131,9 +142,24 @@ describe('inventory management with real PostgreSQL', () => {
     const replayBody = concurrentReplay.json()
     expect(new Set([firstBody.replayed, replayBody.replayed])).toEqual(new Set([false, true]))
     expect(firstBody.doc.id).toBe(replayBody.doc.id)
-    expect(await prisma.warehouseLedgerMovement.count({
-      where: { tenantId, sourceType: 'WarehouseSelfLoss', sourceId: idempotencyKey },
-    })).toBe(1)
+    expect((await app.inject({ method: 'POST', url: `/api/warehouse-docs/${firstBody.doc.id}/confirm`, headers: headers() })).statusCode).toBe(200)
+    expect((await app.inject({ method: 'POST', url: `/api/warehouse-docs/${firstBody.doc.id}/review`, headers: headers() })).statusCode).toBe(200)
+    const postedSelfLossDoc = await prisma.warehouseDoc.findFirstOrThrow({
+      where: { id: firstBody.doc.id, tenantId },
+      include: { lines: true },
+    })
+    expect(postedSelfLossDoc.lines).toHaveLength(1)
+    expect(postedSelfLossDoc.lines[0].movementId).toBeTruthy()
+    const selfLossMovement = await prisma.warehouseLedgerMovement.findFirstOrThrow({
+      where: { id: postedSelfLossDoc.lines[0].movementId!, tenantId },
+    })
+    expect(selfLossMovement).toMatchObject({
+      sourceType: 'WarehouseSelfLoss',
+      sourceLineId: productId,
+      physicalDelta: expect.objectContaining({}),
+    })
+    expect(selfLossMovement.sourceId).toMatch(/^review-[0-9a-f]{48}$/)
+    expect(selfLossMovement.physicalDelta.toNumber()).toBe(-2)
     expect(await prisma.warehouseDoc.count({
       where: { tenantId, idempotencyKey: `self-loss:${idempotencyKey}` },
     })).toBe(1)
@@ -146,14 +172,17 @@ describe('inventory management with real PostgreSQL', () => {
       payload: { ...payload, items: [{ productId, inventoryQuantity: 1, note: '报损现场已隔离' }] },
     })
     expect(changedRequest.statusCode).toBe(409)
-    expect(changedRequest.json().error).toContain('幂等键')
+    expect(changedRequest.json().error).toContain('同一请求编号不能用于不同单据内容')
 
     const reservedBlocked = await app.inject({
       method: 'POST', url: '/api/warehouse-inventory/batch-self-loss', headers: headers(),
       payload: { ...payload, idempotencyKey: randomUUID(), items: [{ productId, inventoryQuantity: 4 }] },
     })
-    expect(reservedBlocked.statusCode).toBe(409)
-    expect(reservedBlocked.json().error).toContain('可用总仓库存不足')
+    expect(reservedBlocked.statusCode, reservedBlocked.body).toBe(200)
+    expect((await app.inject({ method: 'POST', url: `/api/warehouse-docs/${reservedBlocked.json().doc.id}/confirm`, headers: headers() })).statusCode).toBe(200)
+    const blockedReview = await app.inject({ method: 'POST', url: `/api/warehouse-docs/${reservedBlocked.json().doc.id}/review`, headers: headers() })
+    expect(blockedReview.statusCode).toBe(409)
+    expect(blockedReview.json().error).toContain('可用总仓库存不足')
 
     const docDetail = await app.inject({ method: 'GET', url: `/api/warehouse-docs/${firstBody.doc.id}`, headers: headers() })
     expect(docDetail.statusCode, docDetail.body).toBe(200)
@@ -177,10 +206,14 @@ describe('inventory management with real PostgreSQL', () => {
     expect(Number(balance.physicalQty)).toBe(13)
     expect(Number(balance.reservedQty)).toBe(10)
   })
-  it('审核写入后管理页和数据库一致', async () => {
+  it('审核复审重放后管理页和数据库一致', async () => {
     const doc = await prisma.warehouseDoc.findFirstOrThrow({ where: { tenantId, docNo: inboundNo } })
-    const audit = await app.inject({ method: 'POST', url: `/api/warehouse-docs/${doc.id}/confirm`, headers: headers('ADMIN') })
+    const audit = await app.inject({ method: 'POST', url: `/api/warehouse-docs/${doc.id}/confirm`, headers: headers() })
     expect(audit.statusCode, audit.body).toBe(200)
+    expect(audit.json().changed).toBe(false)
+    const review = await app.inject({ method: 'POST', url: `/api/warehouse-docs/${doc.id}/review`, headers: headers() })
+    expect(review.statusCode, review.body).toBe(200)
+    expect(review.json().changed).toBe(false)
     expect((await get('other-in')).json().rows[0].status).toBe('已审核')
     expect((await prisma.warehouseDoc.findUniqueOrThrow({ where: { id: doc.id } })).status).toBe('CONFIRMED')
   })
@@ -190,10 +223,16 @@ describe('inventory management with real PostgreSQL', () => {
     expect(response.json().rows[0]).toMatchObject({ no: 'IN-MGMT', upstream: 'PO-MGMT', date: '2026-09-22', supplier: '验证供应商', amount: 123.45, attachments: '1 项', review: null })
     expect((await get('purchase-in', { start: '2026-09-23' })).json().total).toBe(0)
   })
-  it('盘点筛选和金额与数据库一致，未记录仓库保持空值', async () => {
-    const response = await get('count', { filters: JSON.stringify({ item: '验证土豆', difference: '有差异' }), start: '2026-09-22', end: '2026-09-22' })
+  it('供应链总仓盘点只读取WarehouseStocktake，不混入旧门店InventoryCount', async () => {
+    const response = await get('count', { filters: JSON.stringify({ difference: '有差异' }), start: '2026-09-22', end: '2026-09-22' })
     expect(response.statusCode, response.body).toBe(200)
-    expect(response.json().rows[0]).toMatchObject({ no: 'COUNT-MGMT', org: '验证门店', warehouse: null, bookAmount: 100, actualAmount: 90, differenceAmount: -10, auditedAt: '2026-09-22' })
+    expect(response.json().rows).toHaveLength(1)
+    expect(response.json().rows[0]).toMatchObject({
+      no: 'WCOUNT-MGMT', org: '管理页集成测试', warehouse: '验证总仓',
+      bookAmount: 80, actualAmount: 85, differenceAmount: 5,
+      submitter: null, submittedAt: null, auditor: '验证操作员', auditTime: '2026-09-22 10:00:00',
+    })
+    expect(response.json().rows.some((row: any) => row.no === 'COUNT-MGMT')).toBe(false)
     expect((await get('count', { start: '2026-09-21', end: '2026-09-21' })).json().total).toBe(0)
     expect((await get('count', { start: '2026-09-23', end: '2026-09-23' })).json().total).toBe(0)
     expect((await get('count', { filters: JSON.stringify({ item: '不存在的物品' }) })).json().total).toBe(0)

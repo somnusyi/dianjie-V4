@@ -41,6 +41,7 @@ vi.mock('@/components/v2/product-image-preview', () => ({
 vi.mock('@/lib/v2-auth', () => ({
   apiFetch: vi.fn(),
   apiDownload: vi.fn(),
+  getUser: () => null,
 }))
 
 import { apiFetch } from '@/lib/v2-auth'
@@ -581,3 +582,64 @@ it('先打开新增再收到唯一履约方时，保留已填内容并带入正�
     expect(JSON.parse(String(write![1]!.body))).toMatchObject({ supplierId: 'sup-1', name: '袋装米线' })
   } finally { cleanup(container, root) }
 })
+
+it('批量分类从已核实的同一履约方选择加载分类，不依赖已移除的供应商筛选', async () => {
+  mockFetch.mockReset(); mockRoutes()
+  const { container, root } = render(<InternalSupplyChainProductsPage />)
+  try {
+    await waitFor(() => !!container.querySelector('input[aria-label="选择 土豆"]'))
+    act(() => (container.querySelector('input[aria-label="选择 土豆"]') as HTMLInputElement).click())
+    await waitFor(() => Array.from(container.querySelectorAll('select')).some(select => select.textContent?.includes('选择新分类') && select.options.length > 1))
+    const select = Array.from(container.querySelectorAll('select')).find(select => select.textContent?.includes('选择新分类'))!
+    act(() => Simulate.change(select, { target: { value: '蔬菜' } } as any))
+    expect((findButton(container, '批量分类') as HTMLButtonElement).disabled).toBe(false)
+    expect(container.textContent).not.toContain('在“供应商”筛选')
+  } finally { cleanup(container, root) }
+})
+
+it('切换所选履约方后立即清除旧分类，等待新分类响应再开放', async () => {
+  mockFetch.mockReset(); mockRoutes()
+  const original=mockFetch.getMockImplementation()!
+  let resolveSecond!: (rows: any[]) => void
+  const second=new Promise<any[]>(resolve=>{resolveSecond=resolve})
+  mockFetch.mockImplementation((path,init)=>{
+    const url=String(path)
+    if(url.startsWith('/api/products/categories?supplierId=sup-2')) return second
+    if(url.startsWith('/api/products/categories?supplierId=sup-1')) return Promise.resolve([{name:'甲类'}])
+    if(url.startsWith('/api/products?')&&url.includes('page=')) return Promise.resolve({items:[PRODUCT,{...PRODUCT,id:'p2',name:'青笋',supplier:{id:'sup-2',name:'山禾食材'}}],total:2,page:1,pageSize:20})
+    return original(path,init)
+  })
+  const {container,root}=render(<InternalSupplyChainProductsPage/>)
+  try {
+    await waitFor(()=>!!container.querySelector('input[aria-label="选择 青笋"]'))
+    act(()=>Simulate.change(container.querySelector('input[aria-label="选择 土豆"]')!,{target:{checked:true}} as any))
+    const bulk=()=>Array.from(container.querySelectorAll('select')).find(row=>row.textContent?.includes('选择新分类'))!
+    await waitFor(()=>bulk()?.textContent?.includes('甲类')??false)
+    act(()=>{
+      Simulate.change(container.querySelector('input[aria-label="选择 土豆"]')!,{target:{checked:false}} as any)
+      Simulate.change(container.querySelector('input[aria-label="选择 青笋"]')!,{target:{checked:true}} as any)
+    })
+    expect(bulk().options.length).toBe(1)
+    expect((findButton(container,'批量分类') as HTMLButtonElement).disabled).toBe(true)
+    await act(async()=>{resolveSecond([{name:'乙类'}]);await second})
+    expect(bulk().textContent).toContain('乙类')
+    expect(bulk().textContent).not.toContain('甲类')
+  } finally {cleanup(container,root)}
+
+})
+
+  it('edits a pick location through the existing product form without changing other fields', async () => {
+    mockRoutes()
+    const {container,root}=render(<InternalSupplyChainProductsPage />)
+    await waitFor(()=>container.textContent?.includes('土豆') ?? false)
+    expect(Array.from(container.querySelectorAll('th')).map(n=>n.textContent)).toContain('库位')
+    await act(async()=>{findButton(container,'编辑')?.click()})
+    const input=container.querySelector('input[aria-label="库位"]') as HTMLInputElement
+    expect(input.maxLength).toBe(32)
+    act(()=>{Simulate.change(input,{target:{value:'冷藏-002'} as any})})
+    await act(async()=>{findButton(container,'保存修改')?.click()})
+    const patch=mockFetch.mock.calls.find(([path,options])=>path==='/api/products/p1' && options?.method==='PATCH')
+    expect(patch).toBeTruthy()
+    expect(JSON.parse(String(patch![1]?.body))).toEqual({location:'冷藏-002'})
+    cleanup(container,root)
+  })

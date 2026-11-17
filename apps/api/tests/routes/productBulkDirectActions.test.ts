@@ -241,7 +241,18 @@ describe('product bulk direct actions', () => {
       select: { id: true },
     })
     expect(mocks.productGroupBy).toHaveBeenCalledWith(expect.objectContaining({
-      where: { tenantId, supplierId: supplierAId },
+      where: expect.objectContaining({
+        tenantId,
+        supplierId: supplierAId,
+        NOT: expect.arrayContaining([
+          expect.objectContaining({
+            supplier: expect.objectContaining({
+              is: expect.objectContaining({ businessScopes: { has: 'DIRECT_STORE_VENDOR' } }),
+            }),
+            upstreamSources: { none: { tenantId, isActive: true } },
+          }),
+        ]),
+      }),
     }))
     expect(mocks.categoryFindMany).toHaveBeenCalledWith({
       where: { tenantId, supplierId: supplierAId },

@@ -6,6 +6,7 @@ const supplierOrderListPage = readFileSync(new URL('../../app/v2/supplier/orders
 const poSuccessPage = readFileSync(new URL('../../app/v2/chef/purchase/po-success/[id]/page.tsx', import.meta.url), 'utf8')
 const groupPage = readFileSync(new URL('../../app/v2/supply-chain/fulfillment/group/[groupId]/page.tsx', import.meta.url), 'utf8')
 const deliveryNotePage = readFileSync(new URL('../../app/v2/supplier/orders/[id]/delivery-note/page.tsx', import.meta.url), 'utf8')
+const deliveryNotePaper = readFileSync(new URL('./delivery-note-paper.tsx', import.meta.url), 'utf8')
 const sharedComponent = readFileSync(new URL('./order-detail-shared.tsx', import.meta.url), 'utf8')
 
 const sharedImport = "from '@/components/v2/order-detail-shared'"
@@ -158,7 +159,8 @@ describe('single and grouped fulfillment detail architecture', () => {
     expect(deliveryNotePage).toContain("it.costAmount != null ? Number(Number(it.costAmount).toFixed(2)) : '—'")
     expect(deliveryNotePage).toContain('exportOrder.costAmount == null ? null : Number(exportOrder.costAmount)')
     expect(deliveryNotePage).toContain("['F', 'G', 'H']")
-    expect(deliveryNotePage).toContain('>实发金额</td>')
+    expect(deliveryNotePage).toContain('<DeliveryNotePaper')
+    expect(deliveryNotePaper).toContain('>合计</td>')
     expect(deliveryNotePage).not.toContain('原订货单总额')
   })
 

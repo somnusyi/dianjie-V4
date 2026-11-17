@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { currentMonthRange, loadCreatedRecord, receiptReviewActionForStatus, shortDate, unitPriceMoney, money, statusTone } from './upstream-procurement'
+import { currentMonthRange, loadCreatedRecord, receiptReviewActionForStatus, shortDate, unitPriceMoney, money, statusTone, settlementMoney, sumSettlementAmounts } from './upstream-procurement'
 
 describe('upstream procurement UI helpers', () => {
   it('builds the complete local calendar month', () => {
@@ -39,6 +39,23 @@ describe('upstream procurement UI helpers', () => {
       record: { id: 'new-id', name: '新合同' },
     })
   })
+})
+
+it('keeps recorded statement tails and signed credits without unsafe-number conversion', () => {
+  expect(settlementMoney('100.1234')).toBe('¥100.1234')
+  expect(settlementMoney('-12.3456')).toBe('-¥12.3456')
+  expect(settlementMoney('87.7778')).toBe('¥87.7778')
+  expect(settlementMoney('1.2000')).toBe('¥1.20')
+  expect(settlementMoney('0.0001')).toBe('¥0.0001')
+  expect(settlementMoney('-0.0000')).toBe('¥0.00')
+  expect(settlementMoney('9999999999999999.9999')).toBe('¥9,999,999,999,999,999.9999')
+  expect(settlementMoney('invalid')).toBe('—')
+  expect(settlementMoney(null)).toBe('—')
+  expect(settlementMoney('1.12345')).toBe('—')
+  expect(sumSettlementAmounts(['100.1234', '-12.3456'])).toBe('87.7778')
+  expect(sumSettlementAmounts(['9007199254740992.0001', '0.0002', '-0.0001'])).toBe('9007199254740992.0002')
+  expect(sumSettlementAmounts([])).toBe('0.0000')
+  expect(sumSettlementAmounts(['1', 'invalid'])).toBe('—')
 })
 
 

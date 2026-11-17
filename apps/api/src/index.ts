@@ -101,6 +101,8 @@ import { inventoryManagementRoutes } from './routes/inventoryManagement'
 import { storeTransferRoutes } from './routes/storeTransfers'
 import { warehouseInventoryRoutes } from './routes/warehouseInventory'
 import { warehouseStocktakeRoutes } from './routes/warehouseStocktake'
+import { warehouseStocktakePlanRoutes } from './routes/warehouseStocktakePlans'
+import { warehouseStocktakeSelectionRoutes } from './routes/warehouseStocktakeSelection'
 import { warehouseDocsRoutes } from './routes/warehouseDocs'
 import { consumptionAdminRoutes, consumptionRoutes } from './routes/consumption'
 import { storeOverviewRoutes } from './routes/storeOverview'
@@ -289,6 +291,8 @@ async function bootstrap() {
   app.register(storeTransferRoutes, { prefix: '/api/store-transfers' })
   app.register(warehouseInventoryRoutes, { prefix: '/api/warehouse-inventory' })
   app.register(warehouseStocktakeRoutes, { prefix: '/api/warehouse-stocktakes' })
+  app.register(warehouseStocktakePlanRoutes, { prefix: '/api/warehouse-stocktake-plans' })
+  app.register(warehouseStocktakeSelectionRoutes, { prefix: '/api/warehouse-stocktake-selection' })
   app.register(warehouseDocsRoutes, { prefix: '/api/warehouse-docs' })
   app.register(invoiceRoutes, { prefix: '/api/invoices' })
   app.register(invoicePaymentRoutes, { prefix: '/api/invoice-payments' })

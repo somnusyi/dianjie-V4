@@ -18,7 +18,7 @@ describe('auto-fix source candidate resolver', () => {
   it('maps a dynamic production URL to the bracket route source', async () => {
     const files = await collectCandidateSources(repoDir, '/v2/boss/feedback/example-id?from=notice')
     expect(files[0].path).toBe('apps/web/src/app/v2/boss/feedback/[id]/page.tsx')
-    expect(files[0].content).toContain('BossFeedbackDetailPage')
+    expect(files[0].content).toContain('redirect(`/v2/feedback/${encodeURIComponent(params.id)}`)')
   })
 
   it('fails closed when the page cannot be mapped', async () => {

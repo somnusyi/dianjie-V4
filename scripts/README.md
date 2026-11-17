@@ -40,16 +40,9 @@ export V4_DB_PASSWORD='<redacted>'     # RDS dianjie_v4 密码
 
 两份都自动留 30 天。
 
-### `rollback.sh` · 紧急回滚
+### `rollback.sh` · 已停用的旧入口
 
-```bash
-./scripts/rollback.sh                            # 回滚到最近一次 build 备份（不动 DB）
-./scripts/rollback.sh 20260513-103000            # 回滚到指定 tag
-./scripts/rollback.sh --list                     # 列所有可用备份
-./scripts/rollback.sh --with-db <tag>            # 同时回滚 DB（⚠️ 会丢 deploy 后数据）
-```
-
-**默认不回滚 DB** —— web/api code 回滚通常已经能解决问题，DB 回滚意味着丢失新写入的真实业务数据。只有数据被严重破坏才用 `--with-db`。
+此脚本现在只返回 `BLOCKED`，不连接服务器、不恢复程序或数据库。旧构建与数据库覆盖流程无法兼容1.3.3新增的密文、订单预占、调拨流水和浏览器会话。恢复门槛及待完成的兼容包方案见 `docs/ops/G02_COMPATIBLE_ROLLBACK.md`。
 
 ### `backup-db.sh` · 单独触发 DB 备份
 deploy.sh 内部会自动调，平时也可单独跑（升 schema 前手动多留一份）：
@@ -146,8 +139,7 @@ CONFIRM_PRODUCTION_BASELINE=APPLY_BASELINE_dianjie_v4 \
 │                                                           │
 │  # 观察 Sentry / OpLog 30 分钟                             │
 │                                                           │
-│  # 万一炸了 →                                              │
-│  ./scripts/rollback.sh                                    │
+│  # 发布异常：按当前版本受审恢复方案处理，勿调用旧rollback.sh │
 │                                                           │
 └───────────────────────────────────────────────────────────┘
 ```

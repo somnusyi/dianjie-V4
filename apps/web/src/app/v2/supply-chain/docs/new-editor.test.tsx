@@ -169,7 +169,7 @@ it('outbound uses the same four footer actions and restores base-unit quantity/r
  await change(host.querySelector('select[aria-label="出库用途"]')!,'SAMPLE_ISSUE')
  await change(host.querySelector('input[aria-label="出库原因/去向"]')!,'合成样品领用')
  expect(Array.from(host.querySelectorAll('footer button')).map(b=>b.textContent)).toEqual(['取消','保存','提交','审核'])
- expect(host.textContent).toContain('提交时计算')
+ expect(host.textContent).toContain('复审时计算')
  const payload=mocks.draft.mock.calls.at(-1)![2]
  expect(mocks.draft.mock.calls.at(-1)![0]).toBe('OUTBOUND')
  expect(payload.rows[0]).toMatchObject({inventoryQuantity:'2',totalAmount:''})

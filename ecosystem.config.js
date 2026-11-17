@@ -12,29 +12,42 @@
 // 敏感信息从 /app/dianjie-v4/.env 读取，此文件不含密码
 // ══════════════════════════════════════════════════════
 
+// Parse only this deployment's environment; PM2 does not load env_file.
+const { readFileSync } = require('node:fs')
+const { parseEnv } = require('node:util')
+const deploymentEnv = parseEnv(readFileSync('/app/dianjie-v4/.env', 'utf8'))
+
 module.exports = {
   apps: [
     {
       name: 'dianjie-v4-api',
+      restart_delay: 3000,
       cwd: '/app/dianjie-v4/apps/api',
       script: 'dist/index.js',
-      env_file: '/app/dianjie-v4/.env',
-      env: { PORT: '4004', API_PORT: '4004' },
+      env: { ...deploymentEnv, PORT: '4004', API_PORT: '4004' },
       node_args: '--experimental-require-module',
       // 600M: 上传时整文件 buffer 进内存, 50MB 视频 concat 瞬时 ~2x, 给足余量 (2026-06)
       max_memory_restart: '600M',
       exec_mode: 'fork',
+      autorestart: true,
+      min_uptime: 10000,
+      max_restarts: 10,
+      kill_timeout: 10000,
       out_file: '/var/log/pm2/dianjie-v4-api.out.log',
       error_file: '/var/log/pm2/dianjie-v4-api.err.log',
     },
     {
       name: 'dianjie-v4-web',
+      restart_delay: 3000,
       cwd: '/app/dianjie-v4/apps/web/apps/web',
       script: 'server.js',
-      env_file: '/app/dianjie-v4/.env',
-      env: { PORT: '3204', HOSTNAME: '0.0.0.0' },
+      env: { ...deploymentEnv, PORT: '3204', HOSTNAME: '0.0.0.0' },
       max_memory_restart: '400M',
       exec_mode: 'fork',
+      autorestart: true,
+      min_uptime: 10000,
+      max_restarts: 10,
+      kill_timeout: 10000,
       out_file: '/var/log/pm2/dianjie-v4-web.out.log',
       error_file: '/var/log/pm2/dianjie-v4-web.err.log',
     },
@@ -47,10 +60,13 @@ module.exports = {
       script: 'python3',
       args: 'app.py',
       interpreter: 'none',                // PM2 不要再次嵌套 node 解释器
-      env_file: '/app/dianjie-v4/.env',
-      env: { CMB_SERVICE_PORT: '5001' },
+      env: { ...deploymentEnv, CMB_SERVICE_PORT: '5001' },
       max_memory_restart: '256M',
       exec_mode: 'fork',
+      autorestart: true,
+      min_uptime: 10000,
+      max_restarts: 10,
+      kill_timeout: 10000,
       out_file: '/var/log/pm2/dianjie-v4-cmb.out.log',
       error_file: '/var/log/pm2/dianjie-v4-cmb.err.log',
       // Python 进程崩溃 5 秒内重启

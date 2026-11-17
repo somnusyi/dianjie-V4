@@ -255,7 +255,7 @@ export default function InternalSupplyChainProductsPage() {
     setLoading(true)
     setError(null)
     apiFetch<{ items: ProductRow[]; total: number; page: number; pageSize: number }>(
-      `/api/products${buildProductQuery(filters)}`,
+      `/api/products${buildProductQuery(filters)}&scope=supply-chain`,
     )
       .then(data => {
         if (sequence !== requestSequence.current) return
@@ -275,7 +275,8 @@ export default function InternalSupplyChainProductsPage() {
   useEffect(() => {
     if (!filtersReady) return
     const sequence = ++countSequence.current
-    apiFetch<Array<{ category: string | null }>>(`/api/products${buildProductCountQuery(filters)}`)
+    const query = buildProductCountQuery(filters)
+    apiFetch<Array<{ category: string | null }>>(`/api/products${query ? `${query}&` : '?'}scope=supply-chain`)
       .then(data => {
         if (sequence !== countSequence.current) return
         setCategoryCounts(countProductsByCategory(Array.isArray(data) ? data : []))
@@ -292,12 +293,12 @@ export default function InternalSupplyChainProductsPage() {
   useEffect(() => {
     let active = true
     Promise.all([
-      apiFetch<CategoryOption[]>('/api/products/categories').catch(() => [] as CategoryOption[]),
+      apiFetch<CategoryOption[]>('/api/products/categories?scope=supply-chain').catch(() => [] as CategoryOption[]),
       // 商品 supplierId 表示面向门店的履约主体，不是总仓采购来源。
       // 显式限定业务范围，避免把“上游供应商管理”中的采购合作方混入商品筛选。
       apiFetch<SupplierOption[]>('/api/suppliers?status=ENABLED&businessScope=STORE_FULFILLER').catch(() => [] as SupplierOption[]),
       apiFetch<UpstreamSupplierOption[]>('/api/suppliers?status=ENABLED&businessScope=WAREHOUSE_UPSTREAM').catch(() => [] as UpstreamSupplierOption[]),
-      apiFetch<{ total?: number }>('/api/products?page=1&pageSize=1').catch(() => ({ total: undefined })),
+      apiFetch<{ total?: number }>('/api/products?page=1&pageSize=1&scope=supply-chain').catch(() => ({ total: undefined })),
     ])
       .then(async ([baseCategories, supplierList, upstreamSupplierList, catalog]) => {
         const base = Array.isArray(baseCategories) ? baseCategories : []
@@ -322,7 +323,7 @@ export default function InternalSupplyChainProductsPage() {
         const masterLists = await Promise.all(
           supplierOptions.map((supplier: SupplierOption) =>
             apiFetch<Array<CategoryOption & { isActive?: boolean; sortOrder?: number }>>(
-              `/api/products/categories?supplierId=${encodeURIComponent(supplier.id)}`,
+              `/api/products/categories?supplierId=${encodeURIComponent(supplier.id)}&scope=supply-chain`,
             ).catch(() => [] as Array<CategoryOption & { isActive?: boolean; sortOrder?: number }>),
           ),
         )
@@ -346,7 +347,7 @@ export default function InternalSupplyChainProductsPage() {
     }
     let active = true
     apiFetch<Array<CategoryOption & { isActive?: boolean }>>(
-      `/api/products/categories?supplierId=${encodeURIComponent(bulkSupplierId)}`,
+      `/api/products/categories?supplierId=${encodeURIComponent(bulkSupplierId)}&scope=supply-chain`,
     )
       .then(data => {
         if (!active) return
@@ -371,7 +372,7 @@ export default function InternalSupplyChainProductsPage() {
     }
     let active = true
     apiFetch<Array<CategoryOption & { isActive?: boolean }>>(
-      `/api/products/categories?supplierId=${encodeURIComponent(form.supplierId)}`,
+      `/api/products/categories?supplierId=${encodeURIComponent(form.supplierId)}&scope=supply-chain`,
     )
       .then(data => {
         if (!active) return
@@ -774,7 +775,7 @@ export default function InternalSupplyChainProductsPage() {
     setFormError(null)
     try {
       const created = await apiFetch<CategoryOption>(
-        `/api/products/categories?supplierId=${encodeURIComponent(supplierId)}`,
+        `/api/products/categories?supplierId=${encodeURIComponent(supplierId)}&scope=supply-chain`,
         { method: 'POST', body: JSON.stringify({ name }) },
       )
       const createdName = created?.name?.trim() || name

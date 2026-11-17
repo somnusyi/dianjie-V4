@@ -18,7 +18,7 @@ describe('总仓自损页面契约', () => {
     expect(source).toContain('确认提交总仓自损？')
     expect(source).toContain('SUPPLY_CHAIN_BEFORE_NAVIGATE_EVENT')
     expect(source).toContain("window.addEventListener('beforeunload'")
-    expect(source).toContain('不能直接改写历史')
+    expect(source).toContain('复审后才扣减总仓库存')
     expect(source).toContain('/v2/supply-chain/inventory-management/other-out')
     expect(source).toContain('导出其他出库单')
     expect(source).toContain('/v2/supply-chain/docs?doc=')

@@ -39,7 +39,7 @@ export default function FeedbackChatPage() {
 
   useEffect(() => {
     load()
-    // 简单轮询: 每 5s 刷新一次, 拿到审批进度等 system 消息
+    // 简单轮询: 每 5s 刷新一次, 拿到 AI 回复和反馈记录消息
     const timer = setInterval(() => {
       if (document.visibilityState === 'visible') load()
     }, 5000)

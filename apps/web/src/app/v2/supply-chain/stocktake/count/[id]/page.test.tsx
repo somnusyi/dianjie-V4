@@ -79,7 +79,7 @@ describe('stocktake review print page', () => {
     const { container, root } = renderPage()
     await waitFor(() => container.textContent?.includes('有差异商品') ?? false)
 
-    expect(mockFetch).toHaveBeenCalledWith('/api/inventory-counts/count-1')
+    expect(mockFetch).toHaveBeenCalledWith('/api/warehouse-stocktakes/count-1/review')
     expect(container.textContent).not.toContain('零差异商品')
     expect(container.textContent).not.toContain('未盘商品')
     expect(container.textContent).toContain('待审核')
@@ -93,13 +93,39 @@ describe('stocktake review print page', () => {
     expect(paper?.textContent).toContain('有差异商品')
     expect(paper?.textContent).not.toContain('零差异商品')
     expect(paper?.querySelector('button')).toBeNull()
-    expect(Array.from(paper?.querySelectorAll('col') || []).map(column => (column as HTMLTableColElement).style.width)).toEqual(['10%', '18%', '5%', '7%', '7%', '8%', '10%', '29%', '6%'])
+    expect(Array.from(paper?.querySelectorAll('col') || []).map(column => (column as HTMLTableColElement).style.width)).toEqual(['8%', '16%', '7%', '8%', '5%', '7%', '7%', '8%', '10%', '19%', '5%'])
 
     clickByText(container, '打印复盘单')
     await waitFor(() => vi.mocked(window.print).mock.calls.length === 1)
     act(() => root.unmount())
     container.remove()
     expect(document.body.querySelector('[data-stocktake-print]')).toBeNull()
+  })
+
+  it('导出当前盘点单的两工作表Excel响应', async () => {
+    const createObjectUrl = Object.getOwnPropertyDescriptor(URL, 'createObjectURL')
+    const revokeObjectUrl = Object.getOwnPropertyDescriptor(URL, 'revokeObjectURL')
+    Object.defineProperty(URL, 'createObjectURL', { configurable: true, value: vi.fn(() => 'blob:count-detail') })
+    Object.defineProperty(URL, 'revokeObjectURL', { configurable: true, value: vi.fn() })
+    const anchorClick = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+    mockFetch.mockImplementation(async (path: string) => path === '/api/warehouse-stocktakes/count-1/review'
+      ? count
+      : path === '/api/warehouse-stocktakes/count-1/export'
+        ? { filename: '盘点单-PD20260924001.xlsx', fileBase64: 'AA==' }
+        : Promise.reject(new Error(`unexpected ${path}`)))
+    const { container, root } = renderPage()
+    await waitFor(() => container.textContent?.includes('有差异商品') ?? false)
+    clickByText(container, '导出 Excel')
+    await waitFor(() => anchorClick.mock.calls.length === 1)
+
+    expect(mockFetch).toHaveBeenCalledWith('/api/warehouse-stocktakes/count-1/export')
+    expect(vi.mocked(URL.createObjectURL)).toHaveBeenCalledTimes(1)
+    act(() => root.unmount())
+    container.remove()
+    if (createObjectUrl) Object.defineProperty(URL, 'createObjectURL', createObjectUrl)
+    else Reflect.deleteProperty(URL, 'createObjectURL')
+    if (revokeObjectUrl) Object.defineProperty(URL, 'revokeObjectURL', revokeObjectUrl)
+    else Reflect.deleteProperty(URL, 'revokeObjectURL')
   })
 
   it('can show all rows and preserves null quantities as uncounted', async () => {
@@ -160,7 +186,7 @@ describe('stocktake review print page', () => {
     await waitFor(() => container.textContent?.includes('RECOVERED-COUNT') ?? false)
 
     expect(container.textContent).not.toContain('首次加载失败')
-    expect(mockFetch.mock.calls.map(([path]) => path)).toEqual(['/api/inventory-counts/broken', '/api/inventory-counts/recovered'])
+    expect(mockFetch.mock.calls.map(([path]) => path)).toEqual(['/api/warehouse-stocktakes/broken/review', '/api/warehouse-stocktakes/recovered/review'])
 
     act(() => root.unmount())
     container.remove()
@@ -282,7 +308,7 @@ describe('stocktake review print page', () => {
     const rectSpy = vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockImplementation(function (this: HTMLElement) {
       if (this.closest('[data-stocktake-fragment-measure]') && this.matches('tbody tr')) {
         const cells = this.querySelectorAll('td')
-        const textLength = (cells[1]?.textContent?.replace('（续）', '') || '').length + (cells[7]?.textContent?.replace('（续）', '') || '').length
+        const textLength = (cells[1]?.textContent?.replace('（续）', '') || '').length + (cells[9]?.textContent?.replace('（续）', '') || '').length
         return rect(textLength <= 4 ? 300 : 800) as DOMRect
       }
       if (this.closest('[data-stocktake-print-measure]') && this.matches('tbody tr')) {
@@ -303,7 +329,7 @@ describe('stocktake review print page', () => {
     expect(paper?.querySelectorAll('.stocktake-print-page').length).toBeGreaterThan(1)
     expect(splitRows.length).toBeGreaterThan(1)
     expect(splitRows.map(row => row.children[1]?.textContent?.replace('（续）', '')).join('')).toBe('有差异商品 500g')
-    expect(splitRows.map(row => row.children[7]?.textContent?.replace('（续）', '')).join('')).toBe('称重/计量差异 秤已复核')
+    expect(splitRows.map(row => row.children[9]?.textContent?.replace('（续）', '')).join('')).toBe('称重/计量差异 秤已复核')
     expect(splitRows.filter(row => row.textContent?.includes('¥-20.00'))).toHaveLength(1)
     expect(splitRows.filter(row => row.textContent?.includes('2 张'))).toHaveLength(1)
     expect(splitRows.slice(1).every(row => row.firstElementChild?.textContent === 'A-01（续）')).toBe(true)

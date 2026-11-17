@@ -115,7 +115,7 @@ export const bossChatRoutes: FastifyPluginAsync = async (app) => {
       select: { id: true, status: true, feedbackId: true },
     })
     if (!run) return reply.status(404).send({ error: '任务不存在' })
-    if (run.feedbackId) return reply.status(400).send({ error: '反馈任务请在反馈审批里部署' })
+    if (run.feedbackId) return reply.status(400).send({ error: '反馈审批已停用，该任务不能从这里部署' })
     if (String(run.status) !== 'DEPLOY_REVIEW') {
       return reply.status(409).send({ error: `当前状态 ${run.status} 不可部署` })
     }

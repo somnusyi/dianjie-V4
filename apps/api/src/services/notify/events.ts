@@ -147,8 +147,8 @@ export const EVENTS = {
     urgent: false,
   },
   FEEDBACK_APPROVAL_PENDING: {
-    label: '反馈待审批',
-    desc: 'AI 整理好改进/需求方案 → 超管手机审批 (批准后立项)',
+    label: '历史反馈提醒',
+    desc: '兼容已排队的旧反馈通知；新反馈不再进入审批',
     defaultRoles: ['SUPER_ADMIN'],
     scopedBy: 'tenant',
     urgent: false,
@@ -362,10 +362,10 @@ export function renderTemplate(event: EventKey, payload: Record<string, any>): R
       return {
         kind: 'textcard',
         textcard: {
-          title: `💡 ${catLabel}反馈待审批:${payload.title || '新反馈'}`,
-          description: `${payload.reporterName || '同事'}${payload.storeName ? ` (${payload.storeName})` : ''} 反馈:${payload.summary || ''}。请审批是否立项。`,
-          url: `${baseUrl()}/v2/boss/feedback/${payload.feedbackId}`,
-          btntxt: '去审批',
+          title: `💡 ${catLabel}反馈:${payload.title || '新反馈'}`,
+          description: `${payload.reporterName || '同事'}${payload.storeName ? ` (${payload.storeName})` : ''} 反馈:${payload.summary || ''}。`,
+          url: `${baseUrl()}/v2/feedback/${payload.feedbackId}`,
+          btntxt: '查看反馈',
         },
       }
     }
@@ -375,8 +375,8 @@ export function renderTemplate(event: EventKey, payload: Record<string, any>): R
         textcard: {
           title: `🚨 紧急故障:${payload.title || '阻断业务'}`,
           description: `${payload.reporterName || '同事'}${payload.storeName ? ` (${payload.storeName})` : ''} 反馈:${payload.summary || ''}。请立即人工处理。`,
-          url: `${baseUrl()}/v2/boss/feedback/${payload.feedbackId}`,
-          btntxt: '去处理',
+          url: `${baseUrl()}/v2/feedback/${payload.feedbackId}`,
+          btntxt: '查看反馈',
         },
       }
     case 'AUTOFIX_PLAN_READY':

@@ -365,7 +365,11 @@ describe('buildProductListWhere', () => {
       req({ supplierId: supplierBId }, { role: 'SUPPLY_CHAIN' }),
     )
     expect(result.error).toBeUndefined()
-    expect(result.where).toEqual({ tenantId, supplierId: supplierBId })
+    expect(result.where).toMatchObject({
+      tenantId,
+      supplierId: supplierBId,
+      NOT: expect.arrayContaining([{ category: 'BOM待采购映射' }]),
+    })
   })
 
   it('rejects supplier without binding', async () => {
@@ -597,11 +601,17 @@ describe('GET /api/products/export.csv', () => {
     expect(mockFindMany).not.toHaveBeenCalled()
   })
 
-  it('allows internal SUPPLY_CHAIN role', async () => {
+  it('allows internal SUPPLY_CHAIN exports without including store stocktake imports', async () => {
     mockFindMany.mockResolvedValue([])
     const response = await app.inject({ method: 'GET', url: '/api/products/export.csv', headers: { 'x-test-actor': 'supply-chain' } })
     expect(response.statusCode).toBe(200)
-    expect(mockFindMany.mock.calls[0][0].where).toEqual({ tenantId })
+    expect(mockFindMany.mock.calls[0][0].where).toMatchObject({
+      tenantId,
+      NOT: expect.arrayContaining([{
+        code: { contains: '-INV-', mode: 'insensitive' },
+        inventorySnapshotItems: { some: { snapshot: { tenantId } } },
+      }]),
+    })
   })
 
   it('returns 400 when export exceeds the hard row cap', async () => {

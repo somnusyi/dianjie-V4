@@ -368,7 +368,10 @@ describe('buildProductListWhere', () => {
     expect(result.where).toMatchObject({
       tenantId,
       supplierId: supplierBId,
-      NOT: expect.arrayContaining([{ category: 'BOM待采购映射' }]),
+      NOT: expect.arrayContaining([
+        { code: { startsWith: 'DJ-BOM-', mode: 'insensitive' } },
+        { category: { in: ['BOM待采购映射', '本地配方镜像'] } },
+      ]),
     })
   })
 

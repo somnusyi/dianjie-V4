@@ -237,6 +237,35 @@ describe('inventory management with real PostgreSQL', () => {
     expect((await get('count', { start: '2026-09-23', end: '2026-09-23' })).json().total).toBe(0)
     expect((await get('count', { filters: JSON.stringify({ item: '不存在的物品' }) })).json().total).toBe(0)
   })
+  it('旧版盘点在新审核字段为空时仍显示原复核人和复核时间', async () => {
+    const legacy = await prisma.warehouseStocktake.create({ data: {
+      tenantId, warehouseId, no: 'WCOUNT-LEGACY-REVIEW', countDate: new Date('2026-09-22T00:00:00Z'),
+      status: 'CONFIRMED', documentType: 'LEGACY', reviewStatus: 'REVIEWED',
+      reviewedAt: new Date(date), reviewedById: userId, createdById: userId, requestKey: randomUUID(),
+    } })
+    try {
+      const response = await get('count', { filters: JSON.stringify({ review: '已复审' }), start: '2026-09-22', end: '2026-09-22' })
+      expect(response.statusCode, response.body).toBe(200)
+      const row = response.json().rows.find((value: any) => value.no === legacy.no)
+      expect(row).toMatchObject({ auditor: '验证操作员', auditTime: '2026-09-22 10:00:00', review: '已复审' })
+    } finally {
+      await prisma.warehouseStocktake.delete({ where: { id: legacy.id } })
+    }
+  })
+  it('有差异筛选只返回已盘完单据，不把未盘完草稿混入', async () => {
+    const incomplete = await prisma.warehouseStocktake.create({ data: {
+      tenantId, warehouseId, no: 'WCOUNT-INCOMPLETE-DIFF', countDate: new Date('2026-09-22T00:00:00Z'),
+      status: 'COUNTING', documentType: 'FORMAL', createdById: userId, requestKey: randomUUID(),
+      itemCount: 2, countedCount: 1, differenceCount: 1,
+    } })
+    try {
+      const response = await get('count', { filters: JSON.stringify({ difference: '有差异' }), start: '2026-09-22', end: '2026-09-22' })
+      expect(response.statusCode, response.body).toBe(200)
+      expect(response.json().rows.some((row: any) => row.no === incomplete.no)).toBe(false)
+    } finally {
+      await prisma.warehouseStocktake.delete({ where: { id: incomplete.id } })
+    }
+  })
   it('所有 9 页通过真实数据库查询；不同角色和租户受到隔离', async () => {
     for (const p of managementPages) {
       expect((await get(p.id)).statusCode).toBe(200)

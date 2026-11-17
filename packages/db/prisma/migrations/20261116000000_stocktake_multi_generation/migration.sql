@@ -52,8 +52,7 @@ CREATE UNIQUE INDEX "wst_merge_tenant_formal_source_key"
 CREATE INDEX "wst_merge_tenant_formal_idx"
   ON "warehouse_stocktake_merge_sources"("tenantId", "formalStocktakeId");
 
-INSERT INTO "warehouse_stocktake_merge_sources" ("id", "tenantId", "sourceStocktakeId", "formalStocktakeId")
-SELECT 'legacy-' || md5("tenantId" || ':' || "id"), "tenantId", "id", "generatedStocktakeId"
-FROM "warehouse_stocktakes"
-WHERE "documentType" = 'MULTI' AND "generatedStocktakeId" IS NOT NULL
-ON CONFLICT ("tenantId", "sourceStocktakeId") DO NOTHING;
+-- This migration is the first release that can create MULTI rows. Therefore
+-- no production row can already have a generatedStocktakeId relationship.
+-- Keep the release DDL-only and let the application append merge evidence for
+-- every new 1.3.4 relationship instead of guessing or backfilling old data.

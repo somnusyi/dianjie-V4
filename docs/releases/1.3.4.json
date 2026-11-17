@@ -1,0 +1,37 @@
+{
+  "version": "1.3.4",
+  "namedOn": "2026-11-17",
+  "previousVersion": "1.3.3",
+  "releaseId": "v1.3.4-20261117",
+  "businessReleaseId": "stocktake-20261117",
+  "status": "release_candidate_verified",
+  "dataImports": 0,
+  "plannedMigrations": [
+    "20261116000000_stocktake_multi_generation",
+    "20261116120000_warehouse_stocktake_reversal",
+    "20261116130000_warehouse_stocktake_preapproval_workflow",
+    "20261116140000_warehouse_stocktake_batch_operations",
+    "20261116150000_warehouse_stocktake_soft_delete",
+    "20261116160000_warehouse_stocktake_print_jobs",
+    "20261116170000_warehouse_stocktake_plans_selection",
+    "20261116180000_stocktake_item_location_source_logs",
+    "20261116190000_warehouse_stocktake_item_reorder"
+  ],
+  "businessDataImported": false,
+  "businessDataRewritten": false,
+  "localVerification": {
+    "status": "passed",
+    "apiUnit": { "passed": 1817, "skipped": 7 },
+    "webUnit": { "passed": 1724, "skipped": 2 },
+    "stocktakeIntegration": { "passed": 52, "failed": 0 },
+    "typecheck": "passed",
+    "productionBuild": "passed",
+    "migrationRehearsal": "passed_old_business_hash_unchanged",
+    "mouseAcceptance": "passed_single_multi_admin_finance_purchaser_manager"
+  },
+  "environments": {
+    "uat": { "status": "pending" },
+    "production": { "status": "pending" }
+  },
+  "rollbackPolicy": "Before any 1.3.4 facts, retain the current containers and backup. After new facts, redeploy a verified 1.3.4 image or forward-fix; never restore the old business database."
+}

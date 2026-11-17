@@ -5096,7 +5096,7 @@ model WarehouseStocktakeItem {
   productSpecSnapshot     String?                          @db.VarChar(240)
   categorySnapshot        String?                          @db.VarChar(120)
   storageLocationSnapshot String?                          @db.VarChar(32)
-  additionSource          WarehouseStocktakeAdditionSource
+  additionSource          WarehouseStocktakeAdditionSource @default(LEGACY)
   inventoryUnit           String                           @db.VarChar(16)
   unitPending             Boolean                          @default(false)
   bookQuantity            Decimal                          @db.Decimal(18, 6)

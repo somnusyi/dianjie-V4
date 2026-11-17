@@ -6,19 +6,51 @@ import {StocktakeWorkspace} from './stocktake-workspace'
 
 ;(globalThis as any).IS_REACT_ACT_ENVIRONMENT = true
 
+const currentUser=vi.hoisted(()=>({id:'user-1',role:'SUPPLY_CHAIN' as string}))
 const push=vi.fn(),fetch=vi.fn()
 vi.mock('next/navigation',()=>({useRouter:()=>({push})}))
-vi.mock('@/lib/v2-auth',()=>({getUser:()=>({role:'SUPPLY_CHAIN'}),apiFetch:(...args:any[])=>fetch(...args)}))
+vi.mock('@/lib/v2-auth',()=>({getUser:()=>currentUser,apiFetch:(...args:any[])=>fetch(...args)}))
 const columns=[{key:'no',label:'单据编号'},{key:'date',label:'盘点日期'},{key:'warehouse',label:'仓库'},{key:'status',label:'状态'},{key:'generated',label:'是否生成盘点单'}]
-const result={id:'multi-count',columns,rows:[{id:'m1',detailId:'m1',rowVersion:3,no:'M1',date:'2026-11-16',warehouse:'总仓',status:'已审核',generated:'否'},{id:'m2',detailId:'m2',rowVersion:4,no:'M2',date:'2026-11-16',warehouse:'总仓',status:'已审核',generated:'否'}],total:2,totalPages:1,page:1,pageSize:100,note:'',sourceAvailable:true,supportedFilters:['warehouse','status','generated'],options:{status:['已审核']}}
-const countResult={...result,id:'count',columns:[{key:'no',label:'单据编号'},{key:'status',label:'状态'},{key:'review',label:'复审'}],rows:[{id:'c1',detailId:'c1',rowVersion:7,no:'C1',status:'已审核',review:'未复审'},{id:'c2',detailId:'c2',rowVersion:8,no:'C2',status:'已审核',review:'未复审'}],options:{status:['已审核'],review:['未复审']}}
+const result={id:'multi-count',columns,rows:[{id:'m1',detailId:'m1',creatorId:'user-1',rowVersion:3,no:'M1',date:'2026-11-16',warehouse:'总仓',status:'已审核',generated:'否'},{id:'m2',detailId:'m2',creatorId:'user-1',rowVersion:4,no:'M2',date:'2026-11-16',warehouse:'总仓',status:'已审核',generated:'否'}],total:2,totalPages:1,page:1,pageSize:100,note:'',sourceAvailable:true,supportedFilters:['no','org','warehouse','item','status','note','generated','printed'],options:{org:['滇界'],warehouse:['总仓'],status:['已审核'],generated:['是','否'],printed:['未打印','已打印','修改后待重打']},choiceOptions:{org:[{value:'tenant:t1',label:'滇界'}],warehouse:[{value:'warehouse:w1',label:'总仓 · HQ'}]}}
+const countResult={...result,id:'count',columns:[{key:'no',label:'单据编号'},{key:'status',label:'状态'},{key:'review',label:'复审'}],rows:[{id:'c1',detailId:'c1',creatorId:'user-1',rowVersion:7,no:'C1',status:'已审核',review:'未复审'},{id:'c2',detailId:'c2',creatorId:'user-1',rowVersion:8,no:'C2',status:'已审核',review:'未复审'}],supportedFilters:['no','org','warehouse','item','status','note','review','difference','countType','countPlan','printed'],options:{...result.options,status:['已审核'],review:['未复审'],difference:['未盘完','有差异','无差异'],countType:['全部盘','日盘','周盘','指定物品'],countPlan:['PLAN-001']}}
 const printDocument=(id:string,no:string)=>({id,no,countDate:'2026-11-16',status:'CONFIRMED',reviewStatus:'UNREVIEWED',warehouse:{code:'HQ',name:'总仓'},totalBookValue:'10.0000',totalCountedValue:'9.0000',totalDifferenceValue:'-1.0000',note:null,items:[{id:`${id}-item`,section:'A区',assignee:'盘点员',productCode:'P-1',productName:'土豆',productSpec:'500g',inventoryUnit:'kg',bookQuantity:'10.000000',countedQuantity:'9.000000',differenceQuantity:'-1.000000',differenceValue:'-1.0000',reason:'复核过'}]})
-beforeEach(()=>{fetch.mockReset();push.mockReset();vi.restoreAllMocks();fetch.mockImplementation(async(url:string,init:any)=>init?.method==='POST'?{stocktake:{id:'formal-1'}}:result)})
+beforeEach(()=>{currentUser.role='SUPPLY_CHAIN';fetch.mockReset();push.mockReset();vi.restoreAllMocks();fetch.mockImplementation(async(url:string,init:any)=>init?.method==='POST'?{stocktake:{id:'formal-1'}}:result)})
 async function render(mode:'count'|'multi-count'='multi-count'){const host=document.createElement('div');document.body.append(host);const root=createRoot(host);await act(async()=>root.render(<StocktakeWorkspace mode={mode}/>));await act(async()=>new Promise(r=>setTimeout(r,0)));return{host,root}}
+function change(element:HTMLInputElement|HTMLSelectElement,value:string){const prototype=element instanceof HTMLSelectElement?HTMLSelectElement.prototype:HTMLInputElement.prototype;Object.getOwnPropertyDescriptor(prototype,'value')!.set!.call(element,value);element.dispatchEvent(new Event('change',{bubbles:true}))}
 
 it('多人列表勾选同日同仓子单后批量生成并进入正式盘点编辑',async()=>{const{host,root}=await render();act(()=>host.querySelectorAll<HTMLInputElement>('input[type=checkbox]').forEach(box=>box.click()));await act(async()=>Array.from(host.querySelectorAll('button')).find(x=>x.textContent==='生成盘点单')!.click());expect(fetch).toHaveBeenCalledWith('/api/warehouse-stocktakes/generate-formal-batch',expect.objectContaining({method:'POST'}));expect(push).toHaveBeenCalledWith('/v2/supply-chain/stocktake/work?doc=formal-1&from=count');act(()=>root.unmount())})
 
-it('专用列表请求不超过API每页100并不展示辅助单位或空方案',async()=>{const{host,root}=await render('count');const url=String(fetch.mock.calls.find(([url])=>String(url).includes('/api/inventory-management/count?'))?.[0]);expect(new URL(url,'http://local').searchParams.get('pageSize')).toBe('100');expect(host.textContent).not.toContain('辅助单位');expect(host.textContent).not.toContain('盘点方案');act(()=>root.unmount())})
+it('专用列表请求不超过API每页100，并完整展示美团式表头筛选',async()=>{fetch.mockImplementation(async(url:string)=>String(url).includes('/api/inventory-management/count?')?countResult:result);const{host,root}=await render('count');const url=String(fetch.mock.calls.find(([url])=>String(url).includes('/api/inventory-management/count?'))?.[0]);expect(new URL(url,'http://local').searchParams.get('pageSize')).toBe('100');expect(host.textContent).not.toContain('辅助单位');for(const label of ['单据编号','机构','仓库','物品','单据状态','盘点差异','盘点类型','盘点方案编号','复审状态','打印状态','备注'])expect(host.textContent).toContain(label);act(()=>root.unmount())})
+
+it('表头筛选传送物品、差异、类型、方案和复审参数，重置后清空',async()=>{fetch.mockImplementation(async()=>countResult);const{host,root}=await render('count');act(()=>{change(host.querySelector('[aria-label="物品"]')!,'菌菇');change(host.querySelector('[aria-label="盘点差异"]')!,'有差异');change(host.querySelector('[aria-label="盘点类型"]')!,'指定物品');change(host.querySelector('[aria-label="盘点方案编号"]')!,'PLAN-001');change(host.querySelector('[aria-label="复审状态"]')!,'未复审')});await act(async()=>new Promise(r=>setTimeout(r,0)));let calls=fetch.mock.calls.filter(([url])=>String(url).includes('/api/inventory-management/count?'));let query=new URL(String(calls.at(-1)![0]),'http://local');expect(JSON.parse(query.searchParams.get('filters')!)).toMatchObject({item:'菌菇',difference:'有差异',countType:'指定物品',countPlan:'PLAN-001',review:'未复审'});act(()=>Array.from(host.querySelectorAll('button')).find(button=>button.textContent==='重置')!.click());await act(async()=>new Promise(r=>setTimeout(r,0)));calls=fetch.mock.calls.filter(([url])=>String(url).includes('/api/inventory-management/count?'));query=new URL(String(calls.at(-1)![0]),'http://local');expect(JSON.parse(query.searchParams.get('filters')!)).toEqual({});act(()=>root.unmount())})
+
+it('多角色操作边界：财务只读、采购和门店角色不可进入总仓写入、管理员可审核',async()=>{
+ const button=(host:HTMLElement,label:string)=>Array.from(host.querySelectorAll('button')).find(value=>value.textContent===label) as HTMLButtonElement
+ for(const [role,expected] of Object.entries({FINANCE:{write:false,audit:false},PURCHASER:{write:false,audit:false},ADMIN:{write:true,audit:true},MANAGER:{write:false,audit:false}})){
+  currentUser.role=role;fetch.mockImplementation(async()=>countResult);const{host,root}=await render('count');act(()=>host.querySelector<HTMLInputElement>('input[aria-label="选择C1"]')!.click())
+  expect(button(host,'新增').disabled).toBe(!expected.write)
+  expect(button(host,'批量提交').disabled).toBe(!expected.write)
+  expect(button(host,'批量审核').disabled).toBe(!expected.audit)
+  expect(button(host,'批量反审核').disabled).toBe(!expected.audit)
+  if(role==='FINANCE')expect(button(host,'打印选中单据').disabled).toBe(false)
+  act(()=>root.unmount());host.remove()
+ }
+})
+
+it('非创建人的供应链账号只能查看草稿，不能编辑、提交或删除',async()=>{
+ const foreign={...countResult,rows:[{...countResult.rows[0],creatorId:'user-2',status:'草稿'}],total:1}
+ fetch.mockImplementation(async()=>foreign)
+ const{host,root}=await render('count')
+ const row=[...host.querySelectorAll('tr')].find(value=>value.textContent?.includes('C1'))!
+ expect(row.textContent).toContain('查看')
+ expect(row.textContent).not.toContain('编辑')
+ expect(row.textContent).not.toContain('删除')
+ act(()=>host.querySelector<HTMLInputElement>('input[aria-label="选择C1"]')!.click())
+ const find=(label:string)=>[...host.querySelectorAll('button')].find(button=>button.textContent===label) as HTMLButtonElement
+ expect(find('批量提交').disabled).toBe(true)
+ expect(find('批量删除').disabled).toBe(true)
+ act(()=>root.unmount())
+})
 
 it('单张反审核使用勾选时版本调用批量端点',async()=>{
  vi.spyOn(window,'prompt').mockReturnValue('录入复核错误')
@@ -126,7 +158,7 @@ it('跨页最多选择100张，第101张禁用并明确提示上限',async()=>{
 })
 
 it('单张和批量删除使用勾选版本、必填原因并展示逐项结果',async()=>{
- const draftResult={...result,rows:[{id:'m1',detailId:'m1',rowVersion:3,no:'M1',date:'2026-11-16',warehouse:'总仓',status:'草稿',generated:'否'}],total:1}
+ const draftResult={...result,rows:[{id:'m1',detailId:'m1',creatorId:'user-1',rowVersion:3,no:'M1',date:'2026-11-16',warehouse:'总仓',status:'草稿',generated:'否'}],total:1}
  vi.spyOn(window,'prompt').mockReturnValue('录入错误删除')
  fetch.mockImplementation(async(url:string,init:any)=>{
   if(String(url).includes('/api/inventory-management/multi-count?'))return draftResult

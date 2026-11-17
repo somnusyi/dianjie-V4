@@ -176,7 +176,6 @@ export default function WarehouseStocktakeWorkPage() {
     "SUPPLY_CHAIN",
     "SUPER_ADMIN",
     "ADMIN",
-    "PURCHASER",
   ].includes(user?.role || "");
   const canAudit = ["SUPPLY_CHAIN", "SUPER_ADMIN", "ADMIN"].includes(
     user?.role || ""
@@ -1579,6 +1578,11 @@ export default function WarehouseStocktakeWorkPage() {
                   placeholder="商品名称 / 编码"
                 />
               </label>
+              <p className="text-caption text-gray3">
+                这里只显示供应链正式商品；门店盘点商品和待映射配方原料不会带入。
+                菌菇尚未建账时可在本次盘点录入实盘数量和成本，也可先去
+                <Link className="underline" href="/v2/supply-chain/inventory/import">库存导入</Link>。
+              </p>
             </>}
             {countScope === "SELECTED" && !planId &&
             sections.slice(0, 1).map((section, index) => (
@@ -1759,7 +1763,7 @@ export default function WarehouseStocktakeWorkPage() {
               >
                 前往商品管理补齐换算
               </Link>
-              {canWrite && ["DRAFT", "COUNTING"].includes(count.status) && (
+              {creatorOrAdmin && ["DRAFT", "COUNTING"].includes(count.status) && (
                 <button
                   disabled={busy}
                   className="underline"
@@ -1949,7 +1953,7 @@ export default function WarehouseStocktakeWorkPage() {
                 </button>
               )}
               {returnPage === "count" &&
-                canWrite &&
+                creatorOrAdmin &&
                 ["DRAFT", "COUNTING"].includes(count.status) && (
                   <button
                     disabled={busy}
@@ -2005,7 +2009,7 @@ export default function WarehouseStocktakeWorkPage() {
                     )}
                   </>
                 )}
-              {canWrite && ["DRAFT", "COUNTING"].includes(count.status) && (
+              {creatorOrAdmin && ["DRAFT", "COUNTING"].includes(count.status) && (
                 <button
                   disabled={busy}
                   onClick={() => confirmTransition("cancel")}
@@ -2318,7 +2322,8 @@ export default function WarehouseStocktakeWorkPage() {
                   </div>
                 )}
                 {returnPage === "multi-count" &&
-                  canWrite &&
+                  count.createdBy?.id === user?.id &&
+                  section.assignedToId === user?.id &&
                   ["DRAFT", "COUNTING"].includes(count.status) &&
                   section.status === "SUBMITTED" && (
                     <div className={sheet.toolbar}>

@@ -213,6 +213,7 @@ export async function resolveWarehouseStocktakeSelection(
   if (selectedIds.length > MAX_WAREHOUSE_STOCKTAKE_ITEMS) throw fail(`每张盘点单最多${MAX_WAREHOUSE_STOCKTAKE_ITEMS}项，请改用固定方案或手工分批`, 400)
 
   const fingerprintUniverse = automatic ? productIds : selectedIds
+  const fingerprintProductIds = new Set(fingerprintUniverse)
   const balances = fingerprintUniverse.length ? await tx.warehouseLedgerBalance.findMany({
     where: { tenantId: input.tenantId, warehouseId: input.warehouseId, productId: { in: fingerprintUniverse } },
     select: { productId: true, rowVersion: true, postingSequence: true, physicalQty: true },
@@ -228,9 +229,14 @@ export async function resolveWarehouseStocktakeSelection(
     windowStart: period?.start.toISOString() || null,
     windowEndExclusive: period?.endExclusive.toISOString() || null,
     plan: plan ? { id: plan.id, rowVersion: plan.rowVersion } : null,
-    productUniverse: productIds,
+    // Manual/fixed selections must not become stale merely because an
+    // unrelated catalogue item or its policy changed after preview.
+    productUniverse: fingerprintUniverse,
     selectedIds,
-    policies: policies.map(policy => ({ productId: policy.productId, rowVersion: policy.rowVersion, canCount: policy.canCount, defaultIncluded: policy.defaultIncluded })).sort((a, b) => a.productId.localeCompare(b.productId)),
+    policies: policies
+      .filter(policy => fingerprintProductIds.has(policy.productId))
+      .map(policy => ({ productId: policy.productId, rowVersion: policy.rowVersion, canCount: policy.canCount, defaultIncluded: policy.defaultIncluded }))
+      .sort((a, b) => a.productId.localeCompare(b.productId)),
     balances: balances.map(balance => ({ productId: balance.productId, rowVersion: balance.rowVersion, postingSequence: balance.postingSequence, physicalQty: balance.physicalQty.toFixed(6) })),
   })
   const selectedSet = new Set(selectedIds)

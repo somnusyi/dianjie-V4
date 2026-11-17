@@ -5,43 +5,10 @@
 CREATE TYPE "WarehouseStocktakeAdjustmentStatus" AS ENUM ('POSTED', 'REVERSED');
 CREATE TYPE "WarehouseStocktakeLifecycleAction" AS ENUM ('APPROVE', 'REVERSE_APPROVAL');
 
--- Older immediate-posting code stored the approval actor/time in the review
--- columns. Preserve that value as the audit fact first. A real final-review
--- timestamp is restored only when an explicit final-review op_log exists.
-CREATE TEMP TABLE "legacy_stocktake_audit_backfill" ON COMMIT DROP AS
-SELECT "id", "tenantId", "reviewedAt", "reviewedById", "reviewStatus"
-FROM "warehouse_stocktakes"
-WHERE "status" = 'CONFIRMED'
-  AND "documentType" IN ('LEGACY', 'FORMAL')
-  AND "postingPolicy" = 'REVIEW'
-  AND "auditedAt" IS NULL
-  AND "reviewedAt" IS NOT NULL;
-
-UPDATE "warehouse_stocktakes" AS stocktake
-SET "auditedAt" = legacy."reviewedAt",
-    "auditedById" = legacy."reviewedById",
-    "reviewedAt" = NULL,
-    "reviewedById" = NULL
-FROM "legacy_stocktake_audit_backfill" AS legacy
-WHERE stocktake."id" = legacy."id";
-
-UPDATE "warehouse_stocktakes" AS stocktake
-SET "reviewedAt" = evidence."createdAt",
-    "reviewedById" = evidence."userId"
-FROM (
-  SELECT DISTINCT ON (logs."tenantId", logs."targetId")
-    logs."tenantId", logs."targetId", logs."createdAt", logs."userId"
-  FROM "op_logs" AS logs
-  JOIN "legacy_stocktake_audit_backfill" AS legacy
-    ON legacy."tenantId" = logs."tenantId" AND legacy."id" = logs."targetId"
-  WHERE legacy."reviewStatus" = 'REVIEWED'
-    AND logs."entityType" = 'WarehouseStocktake'
-    AND logs."action" LIKE '复审锁定总仓盘点%'
-    AND logs."userId" IS NOT NULL
-  ORDER BY logs."tenantId", logs."targetId", logs."createdAt" DESC, logs."id" DESC
-) AS evidence
-WHERE stocktake."tenantId" = evidence."tenantId"
-  AND stocktake."id" = evidence."targetId";
+-- Preserve every historical approval/review field byte-for-byte. Older
+-- confirmed rows intentionally receive no posting provenance and therefore
+-- remain ineligible for automatic reversal; only 1.3.4 approvals append the
+-- cycle and lifecycle evidence required by the reversal service.
 
 ALTER TABLE "warehouse_stocktakes"
   ADD CONSTRAINT "wst_audited_actor_fk"
@@ -63,13 +30,8 @@ ALTER TABLE "warehouse_stocktake_adjustments"
   ADD COLUMN "reversedById" TEXT,
   ADD COLUMN "reversalReason" VARCHAR(500);
 
--- Historical adjustments are cycle 1, but their item-level approval provenance
--- remains NULL so they cannot be guessed into the reversible set.
-UPDATE "warehouse_stocktakes"
-SET "postingCycle" = 1
-WHERE "status" = 'CONFIRMED'
-  AND "documentType" IN ('LEGACY', 'FORMAL')
-  AND "postingPolicy" = 'REVIEW';
+-- Historical rows retain postingCycle=0. The API refuses reversal unless a
+-- positive cycle plus exact item/balance provenance exists.
 
 DROP INDEX "warehouse_stocktake_adjustments_stocktakeId_type_key";
 CREATE UNIQUE INDEX "warehouse_stocktake_adjustments_stocktakeId_cycle_type_key"

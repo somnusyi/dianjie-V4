@@ -243,7 +243,7 @@ export const warehouseStocktakeRoutes: FastifyPluginAsync = async app => {
   app.post('/:id/refresh-units', auth(WAREHOUSE_STOCKTAKE_WRITE_ROLES), async (req: any, reply) => {
     const parsed = rowVersionSchema.safeParse(req.body)
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
-    return refreshWarehouseStocktakeUnits({ tenantId: req.user.tenantId, id: req.params.id, ...parsed.data })
+    return refreshWarehouseStocktakeUnits({ tenantId: req.user.tenantId, userId: req.user.userId, id: req.params.id, ...parsed.data })
   })
   app.post('/:id/submit', auth(WAREHOUSE_STOCKTAKE_WRITE_ROLES), async (req: any, reply) => {
     const parsed = rowVersionSchema.safeParse(req.body)

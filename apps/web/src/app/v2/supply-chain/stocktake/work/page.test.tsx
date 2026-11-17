@@ -148,6 +148,25 @@ describe('总仓盘点作业', () => {
     act(() => root.unmount())
   })
 
+  it('非创建人不显示普通单汇总提交和取消，多人子单仅创建负责人本人可提交', async () => {
+    const foreign = makeCount()
+    foreign.createdBy = { id: 'user-2', name: '盘点员乙' }
+    foreign.sections[0].status = 'SUBMITTED'
+    setupFetch(foreign)
+    let page = renderPage('count')
+    await waitFor(() => page.container.textContent?.includes(foreign.no) ?? false)
+    expect(button(page.container, '汇总提交审核')).toBeUndefined()
+    expect(button(page.container, '取消盘点')).toBeUndefined()
+    act(() => page.root.unmount())
+    document.body.replaceChildren()
+
+    setupFetch(foreign)
+    page = renderPage('multi-count')
+    await waitFor(() => page.container.textContent?.includes(foreign.no) ?? false)
+    expect(button(page.container, '提交审核')).toBeUndefined()
+    act(() => page.root.unmount())
+  })
+
   it('批量按账面或填零只处理本人分区空白项，不覆盖已有实盘值', async () => {
     const count = makeCount()
     count.sections[0].items.push({
@@ -352,6 +371,45 @@ describe('总仓盘点作业', () => {
     await act(async () => button(container, '保存子单草稿')!.click())
     const call = mockFetch.mock.calls.find(([path, init]) => path === '/api/warehouse-stocktakes' && init?.method === 'POST')!
     expect(JSON.parse(String(call[1]?.body)).sections[0].productIds).toEqual(['p0'])
+    act(() => root.unmount())
+  })
+
+  it('单人指定盘点只选一个菌菇即可保存，空选择不会发创建请求', async () => {
+    const products = [
+      { id: 'mushroom-1', code: 'ZZ9M-M1', name: '人工见手青', category: '人工菌', inventoryUnit: 'kg', unit: 'kg' },
+      { id: 'mushroom-2', code: 'ZZ9M-M2', name: '人工鸡枞菌', category: '人工菌', inventoryUnit: 'kg', unit: 'kg' },
+    ]
+    const count = { ...makeCount('DRAFT'), documentType: 'FORMAL', itemCount: 1, sections: [{ ...makeCount('DRAFT').sections[0], items: [makeCount('DRAFT').sections[0].items[0]] }] }
+    mockFetch.mockImplementation(async (path, init) => {
+      if (path === '/api/warehouse-stocktakes/options') return { ...options, products } as any
+      if (path === '/api/warehouse-stocktake-selection/preview') {
+        const input = JSON.parse(String(init?.body || '{}'))
+        return {
+          countScope: 'SELECTED', selectionRule: 'MANUAL_SELECTED', periodUnit: null,
+          selectionFingerprint: 'a'.repeat(64), plan: null,
+          products: products.filter(product => (input.manualProductIds || []).includes(product.id)).map(product => ({ ...product, reasonCode: 'MANUAL_SELECTED' })),
+        } as any
+      }
+      if (path === '/api/warehouse-stocktakes' && init?.method === 'POST') return { stocktake: count } as any
+      if (String(path).endsWith('/count-1')) return count as any
+      return { rows: [] } as any
+    })
+    const { container, root } = renderPage('count')
+    await waitFor(() => container.textContent?.includes('WSC-20260929-001') ?? false)
+    act(() => button(container, '新建盘点单')!.click())
+    act(() => (Array.from(container.querySelectorAll('input[type="radio"]')).at(-1) as HTMLInputElement).click())
+
+    await act(async () => button(container, '保存盘点草稿')!.click())
+    expect(container.textContent).toContain('请至少选择一个盘点商品')
+    expect(mockFetch.mock.calls.some(([path, init]) => path === '/api/warehouse-stocktakes' && init?.method === 'POST')).toBe(false)
+
+    const mushroom = Array.from(container.querySelectorAll('label')).find(label => label.textContent?.includes('ZZ9M-M1 人工见手青'))!.querySelector('input')!
+    act(() => mushroom.click())
+    await act(async () => button(container, '保存盘点草稿')!.click())
+    const call = mockFetch.mock.calls.find(([path, init]) => path === '/api/warehouse-stocktakes' && init?.method === 'POST')!
+    const body = JSON.parse(String(call[1]?.body))
+    expect(body.documentType).toBe('FORMAL')
+    expect(body.sections).toEqual([{ name: '单人盘点', assignedToId: 'user-1', productIds: ['mushroom-1'] }])
     act(() => root.unmount())
   })
 

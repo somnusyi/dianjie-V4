@@ -41,6 +41,7 @@ const stocktakeManagementInclude = {
   createdBy: { select: { name: true } },
   submittedBy: { select: { name: true } },
   auditedBy: { select: { name: true } },
+  reviewedBy: { select: { name: true } },
   generatedFrom: { select: { sourceStocktakeId: true } },
 } satisfies Prisma.WarehouseStocktakeInclude
 type StocktakeManagementRecord = Prisma.WarehouseStocktakeGetPayload<{ include: typeof stocktakeManagementInclude }>
@@ -88,7 +89,16 @@ async function loadStocktakeManagementPage(
   if (isMulti && filters.generated) and.push(filters.generated === '是'
     ? { generatedStocktakeId: { not: null } }
     : filters.generated === '否' ? { generatedStocktakeId: null } : { id: '__unsupported_generated__' })
-  if (!isMulti && filters.difference === '有差异') and.push({ differenceCount: { gt: 0 } })
+  if (!isMulti && filters.difference === '有差异') {
+    const ids = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT "id" FROM "warehouse_stocktakes"
+      WHERE "tenantId" = ${tenantId}
+        AND "deletedAt" IS NULL
+        AND "documentType" IN ('LEGACY', 'FORMAL')
+        AND "differenceCount" > 0 AND "countedCount" = "itemCount"
+    `)
+    and.push({ id: { in: ids.map(row => row.id) } })
+  }
   if (!isMulti && filters.difference === '无差异') {
     const ids = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
       SELECT "id" FROM "warehouse_stocktakes"
@@ -134,7 +144,7 @@ async function loadStocktakeManagementPage(
     tx.warehouse.findMany({ where: { tenantId }, select: { id: true, name: true, code: true }, orderBy: [{ name: 'asc' }, { id: 'asc' }] }),
     isMulti ? Promise.resolve([]) : tx.warehouseStocktakePlan.findMany({
       where: {
-        tenantId, status: 'ENABLED',
+        tenantId,
         ...(filters.warehouse?.startsWith('warehouse:') ? { OR: [{ warehouseId: null }, { warehouseId: filters.warehouse.slice('warehouse:'.length) }] } : {}),
       },
       select: { no: true, name: true }, orderBy: [{ no: 'asc' }, { id: 'asc' }],
@@ -154,13 +164,15 @@ async function loadStocktakeManagementPage(
   if (allRows && records.length > 10000) throw Object.assign(new Error('记录过多，请缩小日期、仓库或物品范围后导出。'), { statusCode: 422 })
   const projected = records.map((row, index) => {
     const printed = ({ UNPRINTED: '未打印', CURRENT: '已打印', STALE: '修改后待重打' } as const)[warehouseStocktakePrintStatus(row)]
+    const auditAt = row.auditedAt ?? (row.documentType === 'LEGACY' ? row.reviewedAt : null)
+    const auditor = row.auditedBy?.name ?? (row.documentType === 'LEGACY' ? row.reviewedBy?.name : null) ?? null
     const base: ManagementRow = isMulti ? {
       recordType: 'WAREHOUSE_STOCKTAKE', detailId: row.id, id: row.id, rowVersion: row.rowVersion,
       no: row.no, date: row.countDate.toISOString().slice(0, 10), org, warehouse: row.warehouse.name,
-      itemCount: row.itemCount, status: stocktakeStatusLabel[row.status], auditedAt: day(row.auditedAt),
+      itemCount: row.itemCount, status: stocktakeStatusLabel[row.status], auditedAt: day(auditAt),
       generated: row.generatedStocktakeId ? '是' : '否', generatedStocktakeId: row.generatedStocktakeId,
-      submitter: row.submittedBy?.name || null, submittedAt: timestamp(row.submittedAt), auditor: row.auditedBy?.name || null,
-      auditTime: timestamp(row.auditedAt), remark: row.note, printed, createdAt: timestamp(row.createdAt), creator: row.createdBy.name, note: row.note,
+      submitter: row.submittedBy?.name || null, submittedAt: timestamp(row.submittedAt), auditor,
+      auditTime: timestamp(auditAt), remark: row.note, printed, createdAt: timestamp(row.createdAt), creator: row.createdBy.name, note: row.note,
     } : {
       recordType: 'WAREHOUSE_STOCKTAKE', detailId: row.id, id: `warehouse:${row.id}`, rowVersion: row.rowVersion,
       no: row.no, date: row.countDate.toISOString().slice(0, 10), org, warehouse: row.warehouse.name,
@@ -168,8 +180,8 @@ async function loadStocktakeManagementPage(
       differenceAmount: Number(row.totalDifferenceValue), countType: stocktakeScopeLabel[row.countScope] || '指定物品',
       countMethod: row.generatedFrom.length ? '多人汇总' : row.documentType === 'LEGACY' ? '历史盘点' : '单人盘点', status: stocktakeStatusLabel[row.status], review: row.reviewStatus === 'REVIEWED' ? '已复审' : '未复审',
       difference: row.countedCount < row.itemCount ? '未盘完' : row.differenceCount ? '有差异' : '无差异',
-      auditedAt: day(row.auditedAt), submitter: row.submittedBy?.name || null, submittedAt: timestamp(row.submittedAt),
-      auditor: row.auditedBy?.name || null, auditTime: timestamp(row.auditedAt), remark: row.note,
+      auditedAt: day(auditAt), submitter: row.submittedBy?.name || null, submittedAt: timestamp(row.submittedAt),
+      auditor, auditTime: timestamp(auditAt), remark: row.note,
       printed, createdAt: timestamp(row.createdAt), creator: row.createdBy.name, note: row.note,
     }
     return {
@@ -177,6 +189,7 @@ async function loadStocktakeManagementPage(
       recordType: base.recordType,
       detailId: base.detailId,
       rowVersion: base.rowVersion,
+      creatorId: row.createdById,
       ...(isMulti ? { generatedStocktakeId: base.generatedStocktakeId } : {}),
       ...Object.fromEntries(config.columns.map(column => [column.key, column.key === 'seq'
         ? (allRows ? index : (page - 1) * q.pageSize + index) + 1
@@ -213,7 +226,7 @@ async function loadStocktakeManagementPage(
     warehouseChoicesByOrg: org ? { [`tenant:${tenantId}`]: choices } : {},
     supportedFilters: isMulti
       ? ['no', 'org', 'warehouse', 'item', 'status', 'note', 'generated', 'printed']
-      : ['no', 'org', 'warehouse', 'item', 'status', 'note', 'review', 'difference', 'countType', 'printed'],
+      : ['no', 'org', 'warehouse', 'item', 'status', 'note', 'review', 'difference', 'countType', 'countPlan', 'printed'],
     sourceAvailable: true,
     note: isMulti ? '多人盘点为独立子单；勾选同日期、同仓库的已审核子单后汇总生成一张正式盘点单。' : '供应链盘点管理展示总仓盘点单。',
     generatedAt: timestamp(new Date()),

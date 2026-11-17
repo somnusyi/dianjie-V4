@@ -259,11 +259,19 @@ describe('warehouse inventory routes', () => {
         warehouseLedgerBalances: { some: { tenantId: 'tenant-1', warehouseId: 'warehouse-1' } },
       })
     expect(buildWarehouseInventoryScopeWhere({ tenantId: 'tenant-1', warehouseId: 'warehouse-1', scope: 'bom-mapping' }))
-      .toMatchObject({ tenantId: 'tenant-1', status: 'ENABLED', category: 'BOM待采购映射', NOT: expect.arrayContaining([{ category: 'BOM待采购映射' }]) })
+      .toMatchObject({ tenantId: 'tenant-1', status: 'ENABLED', category: 'BOM待采购映射' })
+    expect(buildWarehouseInventoryScopeWhere({ tenantId: 'tenant-1', warehouseId: 'warehouse-1', scope: 'bom-mapping' }).NOT)
+      .not.toEqual(expect.arrayContaining([
+        { category: 'BOM待采购映射' },
+        { code: { startsWith: 'DJ-BOM-', mode: 'insensitive' } },
+      ]))
     expect(buildWarehouseInventoryScopeWhere({ tenantId: 'tenant-1', warehouseId: 'warehouse-1', scope: 'unit-review' }))
       .toMatchObject({
         tenantId: 'tenant-1', status: 'ENABLED', unitConversionStatus: { not: 'VERIFIED' },
-        NOT: expect.arrayContaining([{ category: 'BOM待采购映射' }]),
+        NOT: expect.arrayContaining([
+          { code: { startsWith: 'DJ-BOM-', mode: 'insensitive' } },
+          { category: { in: ['BOM待采购映射', '本地配方镜像'] } },
+        ]),
       })
   })
 

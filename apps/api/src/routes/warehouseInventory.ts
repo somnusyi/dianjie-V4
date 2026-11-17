@@ -60,7 +60,13 @@ export function buildWarehouseInventoryScopeWhere(input: {
   scope: WarehouseInventoryScope
 }): Prisma.ProductWhereInput {
   const common = { tenantId: input.tenantId, status: 'ENABLED' as const }
-  if (input.scope === 'bom-mapping') return { ...common, category: 'BOM待采购映射', ...supplyChainProductScope(input.tenantId) }
+  if (input.scope === 'bom-mapping') {
+    return {
+      ...common,
+      category: 'BOM待采购映射',
+      ...supplyChainProductScope(input.tenantId, { includeBomMapping: true }),
+    }
+  }
   if (input.scope === 'unit-review') {
     return {
       ...common,

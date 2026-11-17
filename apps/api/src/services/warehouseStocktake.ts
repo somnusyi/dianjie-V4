@@ -17,7 +17,7 @@ const dec = (value: Prisma.Decimal | string | number) => new Prisma.Decimal(valu
 const preApprovalActions = ['WITHDRAW', 'REJECT', 'HEADER_EDIT', 'ITEM_ADD', 'ITEM_REMOVE', 'ITEM_REORDER', 'DELETE'] as const
 type PreApprovalAction = typeof preApprovalActions[number]
 
-export const WAREHOUSE_STOCKTAKE_WRITE_ROLES = ['SUPPLY_CHAIN', 'SUPER_ADMIN', 'ADMIN', 'PURCHASER'] as const
+export const WAREHOUSE_STOCKTAKE_WRITE_ROLES = ['SUPPLY_CHAIN', 'SUPER_ADMIN', 'ADMIN'] as const
 export const WAREHOUSE_STOCKTAKE_AUDIT_ROLES = ['SUPPLY_CHAIN', 'SUPER_ADMIN', 'ADMIN'] as const
 export const WAREHOUSE_STOCKTAKE_READ_ROLES = [...new Set([...WAREHOUSE_STOCKTAKE_WRITE_ROLES, ...WAREHOUSE_STOCKTAKE_AUDIT_ROLES, 'FINANCE'])]
 
@@ -913,9 +913,10 @@ export async function saveWarehouseStocktakeSection(input: {
   })
 }
 
-export async function refreshWarehouseStocktakeUnits(input: { tenantId: string; id: string; rowVersion: number }) {
+export async function refreshWarehouseStocktakeUnits(input: { tenantId: string; userId: string; id: string; rowVersion: number }) {
   return serializable(async tx => {
     const stocktake = await lockStocktake(tx, input.tenantId, input.id)
+    await assertCreatorOrAdministrator(tx, stocktake, input.userId)
     if (stocktake.documentType !== 'MULTI' && stocktake.postingPolicy === 'REVIEW' && stocktake.status === 'CONFIRMED') throw fail('盘点审核后已调整库存；请使用安全反审核，不能直接退回录入', 409)
     if (stocktake.documentType === 'MULTI' && (stocktake.mergeSources.length || stocktake.generatedStocktakeId)) throw fail('该多人盘点子单已生成正式盘点单，不能退回', 409)
     if (!['DRAFT', 'COUNTING'].includes(stocktake.status)) throw fail('仅录入中的盘点草稿可以刷新换算', 409)
@@ -938,6 +939,15 @@ export async function refreshWarehouseStocktakeUnits(input: { tenantId: string; 
     }
     const items = await tx.warehouseStocktakeItem.findMany({ where: { tenantId: input.tenantId, stocktakeId: input.id } })
     await tx.warehouseStocktake.update({ where: { id: input.id, tenantId: input.tenantId, deletedAt: null }, data: { rowVersion: { increment: 1 }, totalBookValue: items.reduce((sum, item) => sum.plus(item.bookValue), ZERO) } })
+    await tx.opLog.create({ data: {
+      tenantId: input.tenantId,
+      userId: input.userId,
+      action: '刷新盘点单位与账面快照',
+      entityType: 'WarehouseStocktake',
+      targetId: stocktake.id,
+      target: stocktake.no,
+      metadata: { refreshedItemCount: pending.length },
+    } })
     return tx.warehouseStocktake.findFirstOrThrow({ where: { id: input.id, tenantId: input.tenantId, deletedAt: null }, include: detailInclude })
   })
 }
@@ -945,6 +955,7 @@ export async function refreshWarehouseStocktakeUnits(input: { tenantId: string; 
 export async function submitWarehouseStocktake(input: { tenantId: string; userId: string; id: string; rowVersion: number; requireExactVersion?: boolean; batchItemId?: string }) {
   return serializable(async tx => {
     const stocktake = await lockStocktake(tx, input.tenantId, input.id)
+    await assertCreatorOrAdministrator(tx, stocktake, input.userId)
     if (stocktake.documentType === 'MULTI') {
       const ownerSection = stocktake.sections.length === 1 ? stocktake.sections[0] : null
       if (!ownerSection || stocktake.createdById !== input.userId || ownerSection.assignedToId !== input.userId) {
@@ -1225,6 +1236,7 @@ export async function deleteWarehouseStocktake(input: {
 export async function cancelWarehouseStocktake(input: { tenantId: string; userId: string; id: string; rowVersion: number; reason: string }) {
   return serializable(async tx => {
     const stocktake = await lockStocktake(tx, input.tenantId, input.id)
+    await assertCreatorOrAdministrator(tx, stocktake, input.userId)
     if (stocktake.documentType === 'FORMAL' && stocktake.generatedFrom.length) throw fail('该正式盘点单已绑定多人盘点来源，不能取消', 409)
     if (stocktake.documentType === 'MULTI' && (stocktake.mergeSources.length || stocktake.generatedStocktakeId)) throw fail('该多人盘点子单已生成正式盘点单，不能取消', 409)
     if (!['DRAFT', 'COUNTING'].includes(stocktake.status)) throw fail('只有草稿或盘点中单据可以取消', 409)

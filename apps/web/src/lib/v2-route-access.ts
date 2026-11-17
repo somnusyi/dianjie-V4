@@ -18,7 +18,7 @@ function isInternalSupplyChainSharedReadPath(pathname: string): boolean {
  */
 export function rolesForV2Path(pathname: string): readonly string[] | undefined {
   if (pathname === '/v2/supply-chain/stocktake/work' || /^\/v2\/supply-chain\/stocktake\/count\/[^/]+\/?$/.test(pathname)) {
-    return [...INTERNAL_SUPPLY_CHAIN_ROLES, 'PURCHASER', 'FINANCE']
+    return [...INTERNAL_SUPPLY_CHAIN_ROLES, 'FINANCE']
   }
   if (pathname === '/v2/supply-chain/stocktake' || pathname.startsWith('/v2/supply-chain/stocktake/')) {
     return [...INTERNAL_SUPPLY_CHAIN_ROLES, 'FINANCE']

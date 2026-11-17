@@ -662,6 +662,10 @@
       {
         "key": "countPlan",
         "label": "盘点方案编号"
+      },
+      {
+        "key": "review",
+        "label": "复审状态"
       }
     ]
   },

@@ -15,6 +15,7 @@ import {
   saveWarehouseStocktakeSection,
   submitWarehouseStocktake,
   updateWarehouseStocktakeHeader,
+  warehouseStocktakeOptions,
 } from '../../src/services/warehouseStocktake'
 import {
   createWarehouseStocktakePlan,
@@ -109,6 +110,74 @@ afterAll(async () => {
 })
 
 describe('盘点方案与自动圈定', () => {
+  it('只选一个正式菌菇可保存，并排除改过分类的BOM临时商品和本地配方镜像', async () => {
+    const today = businessDateKey()
+    const [mushroom, bom, localRecipe] = await Promise.all([
+      prisma.product.create({ data: {
+        tenantId, code: `${suffix}-ZZ9M-MUSHROOM`, name: '正式人工菌', category: '人工菌', unit: 'kg',
+        inventoryUnit: 'kg', purchaseUnit: 'kg', orderUnit: 'kg', costUnit: 'kg',
+        inventoryUnitsPerPurchaseUnit: 1, inventoryUnitsPerOrderUnit: 1, inventoryUnitsPerCostUnit: 1,
+        unitConversionStatus: 'VERIFIED', price: 12,
+      } }),
+      prisma.product.create({ data: {
+        tenantId, code: `DJ-BOM-${randomUUID().slice(0, 10)}`, name: '错误混入的配方菌菇', category: '人工菌', unit: 'kg',
+        inventoryUnit: 'kg', purchaseUnit: 'kg', orderUnit: 'kg', costUnit: 'kg',
+        inventoryUnitsPerPurchaseUnit: 1, inventoryUnitsPerOrderUnit: 1, inventoryUnitsPerCostUnit: 1,
+        unitConversionStatus: 'VERIFIED', price: 1,
+      } }),
+      prisma.product.create({ data: {
+        tenantId, code: `${suffix}-LOCAL-RECIPE`, name: '本地配方临时商品', category: '本地配方镜像', unit: 'kg',
+        inventoryUnit: 'kg', purchaseUnit: 'kg', orderUnit: 'kg', costUnit: 'kg',
+        inventoryUnitsPerPurchaseUnit: 1, inventoryUnitsPerOrderUnit: 1, inventoryUnitsPerCostUnit: 1,
+        unitConversionStatus: 'VERIFIED', price: 1,
+      } }),
+    ])
+    let createdId = ''
+    const temporaryIds = [mushroom.id, bom.id, localRecipe.id]
+    try {
+      const optionIds = new Set((await warehouseStocktakeOptions(tenantId)).products.map(product => product.id))
+      expect(optionIds.has(mushroom.id)).toBe(true)
+      expect(optionIds.has(bom.id)).toBe(false)
+      expect(optionIds.has(localRecipe.id)).toBe(false)
+
+      for (const forbiddenId of [bom.id, localRecipe.id]) {
+        await expect(previewWarehouseStocktakeSelection({
+          tenantId, warehouseId, countDate: today, countScope: 'SELECTED', manualProductIds: [forbiddenId],
+        })).rejects.toMatchObject({ statusCode: 409 })
+      }
+
+      const preview = await previewWarehouseStocktakeSelection({
+        tenantId, warehouseId, countDate: today, countScope: 'SELECTED', manualProductIds: [mushroom.id],
+      })
+      expect(preview.products.map(product => product.id)).toEqual([mushroom.id])
+
+      const unrelated = await prisma.product.create({ data: {
+        tenantId, code: `${suffix}-UNRELATED-${randomUUID().slice(0, 8)}`, name: '无关新商品', unit: 'kg',
+        inventoryUnit: 'kg', purchaseUnit: 'kg', orderUnit: 'kg', costUnit: 'kg',
+        inventoryUnitsPerPurchaseUnit: 1, inventoryUnitsPerOrderUnit: 1, inventoryUnitsPerCostUnit: 1,
+        unitConversionStatus: 'VERIFIED', price: 1,
+      } })
+      temporaryIds.push(unrelated.id)
+      const created = await createWarehouseStocktake({
+        tenantId, userId, warehouseId, countDate: today, requestKey: randomUUID(), countScope: 'SELECTED',
+        selectionFingerprint: preview.selectionFingerprint,
+        sections: [{ name: '只盘菌菇', assignedToId: userId, productIds: [mushroom.id] }],
+      })
+      createdId = created.stocktake.id
+      expect(created.stocktake.itemCount).toBe(1)
+      expect(created.stocktake.sections[0].items.map(item => item.productId)).toEqual([mushroom.id])
+      expect(await prisma.warehouseLedgerBalance.count({ where: { tenantId, warehouseId, productId: mushroom.id } })).toBe(1)
+    } finally {
+      if (createdId) {
+        const current = await getWarehouseStocktake(tenantId, createdId)
+        if (['DRAFT', 'COUNTING', 'CANCELLED'].includes(current.status) && current.status !== 'CANCELLED') {
+          await cancelWarehouseStocktake({ tenantId, userId, id: createdId, rowVersion: current.rowVersion, reason: '指定菌菇保存回归结束' })
+        }
+      }
+      await prisma.product.updateMany({ where: { id: { in: temporaryIds } }, data: { status: 'DISABLED' } })
+    }
+  })
+
   it('严格绑定scope/rule/period，方案创建必须预览指纹且同key稳定重放', async () => {
     const today = businessDateKey()
     const createdPlan = await createWarehouseStocktakePlan({

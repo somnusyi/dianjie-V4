@@ -222,7 +222,7 @@ describe('总仓多人分区盘点', () => {
     for (const source of sources) {
       const latest = await getWarehouseStocktake(tenantId, source.id)
       await expect(rejectWarehouseStocktake({ tenantId, userId, id: source.id, rowVersion: latest.rowVersion, requestKey: randomUUID(), reason: '不得退回已汇总来源' })).rejects.toMatchObject({ statusCode: 409 })
-      await expect(cancelWarehouseStocktake({ tenantId, userId, id: source.id, rowVersion: latest.rowVersion, reason: '不得取消已汇总来源' })).rejects.toMatchObject({ statusCode: 409 })
+      await expect(cancelWarehouseStocktake({ tenantId, userId: adminUserId, id: source.id, rowVersion: latest.rowVersion, reason: '不得取消已汇总来源' })).rejects.toMatchObject({ statusCode: 409 })
     }
     expect((await prisma.warehouseStocktake.findUniqueOrThrow({ where: { id: formal.id } })).requestKey.length).toBeLessThanOrEqual(160)
     const ids=[formal.id,...sources.map(row=>row.id)]
@@ -486,9 +486,10 @@ describe('总仓多人分区盘点', () => {
     expect(count.itemCount).toBe(3)
     expect(await prisma.warehouseLedgerBalance.count({ where: { tenantId, productId: product.id } })).toBe(0)
     await expect(saveWarehouseStocktakeSection({ tenantId, userId, stocktakeId: count.id, sectionId: count.sections[0].id, rowVersion: 0, submit: true, items: [{ itemId: item.id, countedQuantity: '0' }] })).rejects.toMatchObject({ statusCode: 400 })
-    await expect(refreshWarehouseStocktakeUnits({ tenantId, id: count.id, rowVersion: count.rowVersion })).rejects.toMatchObject({ statusCode: 400 })
+    await expect(refreshWarehouseStocktakeUnits({ tenantId, userId: secondUserId, id: count.id, rowVersion: count.rowVersion })).rejects.toMatchObject({ statusCode: 403 })
+    await expect(refreshWarehouseStocktakeUnits({ tenantId, userId, id: count.id, rowVersion: count.rowVersion })).rejects.toMatchObject({ statusCode: 400 })
     await prisma.product.update({ where: { id: product.id }, data: { purchaseUnit: 'kg', orderUnit: 'kg', costUnit: 'kg', inventoryUnitsPerPurchaseUnit: 1, inventoryUnitsPerOrderUnit: 1, inventoryUnitsPerCostUnit: 1, unitConversionStatus: 'VERIFIED' } })
-    const refreshed = await refreshWarehouseStocktakeUnits({ tenantId, id: count.id, rowVersion: count.rowVersion })
+    const refreshed = await refreshWarehouseStocktakeUnits({ tenantId, userId, id: count.id, rowVersion: count.rowVersion })
     expect(refreshed.sections[0].items.find(row => row.productId === product.id)?.unitPending).toBe(false)
     const replay = await createWarehouseStocktake(input)
     expect(replay.replayed).toBe(true)
@@ -1317,6 +1318,8 @@ describe('总仓多人分区盘点', () => {
     const count = await createCount()
     const payload = { reason: '权限边界验证', rowVersion: count.rowVersion, requestKey: randomUUID() }
     expect((await app.inject({ url: `/api/warehouse-stocktakes/${count.id}`, headers: { 'x-tenant': otherTenantId } })).statusCode).toBe(404)
+    expect((await app.inject({ url: `/api/warehouse-stocktakes/${count.id}`, headers: { 'x-role': 'PURCHASER' } })).statusCode).toBe(403)
+    expect((await app.inject({ method: 'POST', url: '/api/warehouse-stocktakes', headers: { 'x-role': 'PURCHASER' }, payload: {} })).statusCode).toBe(403)
     expect((await app.inject({ method: 'POST', url: `/api/warehouse-stocktakes/${count.id}/approve`, headers: { 'x-role': 'PURCHASER' } })).statusCode).toBe(403)
     expect((await app.inject({ method: 'POST', url: '/api/warehouse-stocktakes', headers: { 'x-role': 'FINANCE' }, payload: {} })).statusCode).toBe(403)
     expect((await app.inject({method:'POST',url:`/api/warehouse-stocktakes/${count.id}/approve`,headers:{'x-role':'FINANCE'}})).statusCode).toBe(403)
@@ -1327,7 +1330,10 @@ describe('总仓多人分区盘点', () => {
     expect((await app.inject({ method: 'POST', url: `/api/warehouse-stocktakes/${count.id}/reverse-approval`, headers: { 'x-role': 'FINANCE' }, payload })).statusCode).toBe(403)
     expect((await app.inject({ method: 'POST', url: `/api/warehouse-stocktakes/${count.id}/reverse-approval`, headers: { 'x-tenant': otherTenantId }, payload })).statusCode).toBe(404)
     expect((await app.inject({ method: 'POST', url: `/api/warehouse-stocktakes/${count.id}/reverse-approval`, payload })).statusCode).toBe(409)
+    expect((await app.inject({ method: 'POST', url: `/api/warehouse-stocktakes/${count.id}/submit`, headers: { 'x-user': secondUserId }, payload: { rowVersion: count.rowVersion } })).statusCode).toBe(403)
+    expect((await app.inject({ method: 'POST', url: `/api/warehouse-stocktakes/${count.id}/cancel`, headers: { 'x-user': secondUserId }, payload: { rowVersion: count.rowVersion, reason: '非创建人不可取消' } })).statusCode).toBe(403)
+    expect((await app.inject({ method: 'POST', url: `/api/warehouse-stocktakes/${count.id}/refresh-units`, headers: { 'x-user': adminUserId, 'x-role': 'ADMIN' }, payload: { rowVersion: count.rowVersion } })).statusCode).toBe(200)
     await expect(createWarehouseStocktake({ tenantId: otherTenantId, userId, warehouseId, countDate: TODAY, requestKey: randomUUID(), sections: [{ name: '跨租户', assignedToId: userId, productIds }] })).rejects.toMatchObject({ statusCode: 404 })
-    await cancelWarehouseStocktake({ tenantId, userId, id: count.id, rowVersion: count.rowVersion, reason: '权限测试结束' })
+    expect((await app.inject({ method: 'POST', url: `/api/warehouse-stocktakes/${count.id}/cancel`, headers: { 'x-user': adminUserId, 'x-role': 'ADMIN' }, payload: { rowVersion: count.rowVersion, reason: '管理员结束权限测试' } })).statusCode).toBe(200)
   })
 })

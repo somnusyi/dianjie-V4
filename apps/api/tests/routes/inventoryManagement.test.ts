@@ -18,6 +18,7 @@ beforeAll(async () => {
 })
 beforeEach(() => {
   fixture.tx = {
+    $queryRaw: vi.fn(async () => [{ id: 'all' }]),
     store:{findMany:vi.fn(async()=>[{id:'store-empty',name:'没有盘点的门店'}])},
     tenant: { findUnique: vi.fn(async ({ where }: any) => ({ name: where.id, slug: where.id })) },
     warehouseDoc: { findMany: vi.fn(async ({ where }: any) => [doc('a'), doc('b'), doc('foreign', 'two')].filter(d => (!where.tenantId || d.tenantId === where.tenantId) && (!where.type || d.type === where.type))) },
@@ -121,6 +122,7 @@ describe('管理表格读取接口', () => {
     expect(response.warehousesByOrg.one).toEqual(['乙仓', '总仓', '甲仓'].sort())
     const filtered = (await get('count', { filters: JSON.stringify({ countType: '全部盘', difference: '有差异' }) })).json()
     expect(filtered.total).toBe(1); expect(filtered.rows[0].no).toBe('PD-ALL'); expect(filtered.totals.actualAmount).toBe(12)
+    expect(fixture.tx.$queryRaw.mock.calls[0][0].strings.join('?')).toContain('"countedCount" = "itemCount"')
   })
 
 })

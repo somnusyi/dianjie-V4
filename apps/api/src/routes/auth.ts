@@ -6,6 +6,7 @@ import { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
 import bcrypt from 'bcryptjs'
 import { loginRateLimitConfig } from '../lib/login-rate-key'
+import { refreshRateKey } from '../lib/account-rate-key'
 import { prisma } from '@dianjie/db'
 import { resolveLoginTenantSlug } from '../lib/preview-tenant'
 import { ACCESS_TTL_MS, REFRESH_TTL_MS, issueAccessToken, issueSessionTokens } from '../services/authTokens'
@@ -140,7 +141,15 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
 
   // POST /api/auth/refresh — 用 refresh token 换新 access
   app.post('/refresh', {
-    config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+    config: { rateLimit: {
+      max: 30,
+      timeWindow: '1 minute',
+      keyGenerator: (request: any) => refreshRateKey(
+        request,
+        token => app.jwt.verify(token) as any,
+        isBrowserSession(request) ? () => readBrowserRefresh(request, app.jwt) : undefined,
+      ),
+    } },
   }, async (request, reply) => {
     const browser = isBrowserSession(request)
     const cookieRefresh = browser ? readBrowserRefresh(request, app.jwt) : null

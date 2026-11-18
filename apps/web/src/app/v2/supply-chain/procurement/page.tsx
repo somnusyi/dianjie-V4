@@ -471,6 +471,7 @@ export default function UpstreamProcurementPage() {
   const [orderProductPickerOpen, setOrderProductPickerOpen] = useState(false)
   const [orderHistory, setOrderHistory] = useState<Order[]>([])
   const [orderHistoryId, setOrderHistoryId] = useState('')
+  const [unavailableHistoryLines, setUnavailableHistoryLines] = useState<Array<OrderLine & { reason: string }>>([])
   const [orderHistoryLoading, setOrderHistoryLoading] = useState(false)
   const [orderHistoryError, setOrderHistoryError] = useState(false)
   const [pendingHistoryId, setPendingHistoryId] = useState('')
@@ -978,6 +979,7 @@ export default function UpstreamProcurementPage() {
     setOrderProductPickerOpen(false)
     setOrderHistory([])
     setOrderHistoryId('')
+    setUnavailableHistoryLines([])
     setOrderHistoryError(false)
     setPendingHistoryId('')
     if (!id) return
@@ -1016,13 +1018,14 @@ export default function UpstreamProcurementPage() {
 
   async function fillOrderFromHistory(id: string, replaceConfirmed = false) {
     if (id && !replaceConfirmed && Object.keys(orderQuantities).length > 0) {
+      setOrderHistoryId(id)
       setPendingHistoryId(id)
       return
     }
     setPendingHistoryId('')
     const requestId = orderSourceRequestRef.current
     setOrderHistoryId(id)
-    if (!id) return
+    if (!id) { setUnavailableHistoryLines([]); return }
     setOrderHistoryLoading(true)
     setError(null)
     try {
@@ -1031,17 +1034,22 @@ export default function UpstreamProcurementPage() {
       if (historical.supplierId !== orderSupplierId) throw new Error('历史采购单不属于当前供应商')
       const quantities: Record<string, string> = {}
       const prices: Record<string, string> = {}
-      let missing = 0
+      const unavailable: Array<OrderLine & { reason: string }> = []
       for (const line of historical.lines || []) {
         const source = orderSources.find(item => item.product.id === line.productId && item.purchaseUnit === line.purchaseUnit)
-        if (!source) { missing++; continue }
+        if (!source) {
+          const sameProduct = orderSources.some(item => item.product.id === line.productId)
+          unavailable.push({ ...line, reason: sameProduct ? '当前采购单位与历史单不同，需核对换算后重新选择' : '该商品已不在当前供应商的有效供货范围' })
+          continue
+        }
         quantities[source.id] = String(line.orderedQty)
         prices[source.id] = String(line.unitPrice)
       }
       setOrderQuantities(quantities)
       setOrderPrices(prices)
+      setUnavailableHistoryLines(unavailable)
       if (warehouses.some(warehouse => warehouse.id === historical.warehouse.id)) setOrderWarehouseId(historical.warehouse.id)
-      setNotice(missing ? `已带入 ${Object.keys(quantities).length} 项；${missing} 项已不在该供应商当前供货范围` : `已带入采购单 ${historical.no} 的商品、数量和单价`)
+      setNotice(unavailable.length ? `已带入 ${Object.keys(quantities).length} 项；${unavailable.length} 项历史明细需核对，已显示在下方` : `已带入采购单 ${historical.no} 的商品、数量和单价`)
     } catch (reason: any) {
       setError(reason?.message || '历史采购单加载失败')
     } finally {
@@ -1071,6 +1079,7 @@ export default function UpstreamProcurementPage() {
     setOrderProductQuery('')
     setOrderNote('')
     setOrderHistoryId('')
+    setUnavailableHistoryLines([])
     setOrderProductPickerOpen(false)
     setShowOrderForm(true)
     setTab('orders')
@@ -1853,6 +1862,7 @@ export default function UpstreamProcurementPage() {
                     <h2 className="text-h3">商品明细</h2>
                     <button type="button" aria-label="打开采购商品选择" disabled={!orderSupplierId || orderSources.length === 0} onClick={() => { setOrderProductQuery(''); setOrderProductPickerOpen(true) }} className="rounded-lg border border-border bg-white px-4 py-2 text-button text-amber-fg disabled:cursor-not-allowed disabled:text-gray3">＋ 添加商品</button>
                   </div>
+                  {unavailableHistoryLines.length > 0 && <div className="mb-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-caption" aria-label="未能带入的历史采购明细"><b>历史单中需核对的商品（未加入本单）</b><ul className="mt-2 space-y-2">{unavailableHistoryLines.map(line => <li key={line.id}>{line.productNameSnapshot} · {line.orderedQty} {line.purchaseUnit} · {line.unitPrice} 元/{line.purchaseUnit}：{line.reason}</li>)}</ul></div>}
                   <div className="overflow-x-auto rounded-lg border border-border">
                     <table className="w-full min-w-[740px] text-left text-caption">
                       <thead className="bg-bg"><tr className="border-b border-border"><th className="w-14 px-3 py-2.5">序号</th><th className="min-w-52 px-3 py-2.5">商品</th><th className="w-40 px-3 py-2.5">采购数量</th><th className="w-44 px-3 py-2.5">本单单价</th><th className="w-28 px-3 py-2.5 text-right">小计</th><th className="w-16 px-3 py-2.5 text-right">操作</th></tr></thead>

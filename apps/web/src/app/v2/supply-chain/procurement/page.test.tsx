@@ -756,6 +756,26 @@ describe('上游采购收货后补报', () => {
     act(() => root.unmount()); container.remove()
   })
 
+  it('历史单商品与当前供货单位不匹配时仍显示历史明细且不误带入数量', async () => {
+    const source = { id: 'source-1', supplierId: postedReceipt.supplier.id, purchaseUnit: '袋', quotedUnitPrice: 8,
+      minOrderQty: 1, inventoryUnitsPerPurchaseUnit: 1,
+      product: { id: 'product-1', code: 'P001', name: '人工见手青', spec: 'kg', inventoryUnit: 'kg', unit: 'kg' } }
+    const historical = { ...changeOrder, status: 'RECEIVED', lines: [{ id: 'historical-line', productId: 'product-1', productNameSnapshot: '人工见手青', purchaseUnit: '箱', orderedQty: 3, unitPrice: 50 }] }
+    installPageMock({ orders: [historical], orderDetail: historical, sources: [source], warehouses: [{ id: 'warehouse-1', code: 'WH001', name: '供应链总仓' }] })
+    const { container, root } = renderPage()
+    await waitFor(() => Boolean(container.querySelector('select[aria-label="采购供应商"]')))
+    const supplier = container.querySelector<HTMLSelectElement>('select[aria-label="采购供应商"]')!
+    act(() => { supplier.value = postedReceipt.supplier.id; supplier.dispatchEvent(new Event('change', { bubbles: true })) })
+    await waitFor(() => Boolean(container.querySelector('select[aria-label="选择历史采购单"] option[value="order-1"]')))
+    const history = container.querySelector<HTMLSelectElement>('select[aria-label="选择历史采购单"]')!
+    act(() => { history.value = 'order-1'; history.dispatchEvent(new Event('change', { bubbles: true })) })
+    await waitFor(() => Boolean(container.querySelector('[aria-label="未能带入的历史采购明细"]')))
+    expect(container.querySelector('[aria-label="未能带入的历史采购明细"]')?.textContent).toContain('人工见手青 · 3 箱 · 50 元/箱')
+    expect(container.querySelector('[aria-label="未能带入的历史采购明细"]')?.textContent).toContain('当前采购单位与历史单不同')
+    expect(container.querySelector('input[aria-label="人工见手青采购数量"]')).toBeNull()
+    act(() => root.unmount()); container.remove()
+  })
+
   it('新建采购单直接创建并发送供应商，不再提交内部审核', async () => {
     const source = { id: 'source-2', supplierId: postedReceipt.supplier.id, purchaseUnit: 'kg', quotedUnitPrice: null,
       minOrderQty: 2, inventoryUnitsPerPurchaseUnit: 1,

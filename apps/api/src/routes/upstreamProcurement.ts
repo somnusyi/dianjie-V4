@@ -1990,7 +1990,7 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
           const lineAmount = money(quantity.times(unitPrice))
           totalAmount = totalAmount.plus(lineAmount)
           return {
-            tenantId, lineNo: index + 1, productId: source.productId,
+            lineNo: index + 1, productId: source.productId,
             productCodeSnapshot: source.product.code, productNameSnapshot: source.product.name,
             productSpecSnapshot: source.product.spec, supplierSkuSnapshot: source.supplierSku,
             purchaseUnit: source.purchaseUnit, inventoryUnit: source.product.inventoryUnit || source.product.unit,

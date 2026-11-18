@@ -52,6 +52,7 @@ describe('direct upstream purchase order', () => {
     expect(data.contractId).toBeUndefined()
     expect(data.totalAmount.toString()).toBe('37.5')
     expect(data.lines.create[0]).toMatchObject({ productId: 'product-a', purchaseUnit: '箱', inventoryUnit: '袋' })
+    expect(data.lines.create[0]).not.toHaveProperty('tenantId')
     expect(data.lines.create[0].unitPrice.toString()).toBe('12.5')
     expect(data.lines.create[0].inventoryUnitsPerPurchaseUnit.toString()).toBe('3')
     expect(mocks.sources.mock.calls[0][0].where).toMatchObject({ tenantId: 'tenant-a', supplierId: 'supplier-a', isActive: true })

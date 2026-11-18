@@ -730,7 +730,10 @@ describe('上游采购收货后补报', () => {
     installPageMock({ sources: [source], warehouses: [{ id: 'warehouse-1', code: 'WH001', name: '供应链总仓' }] })
     const normal = mockFetch.getMockImplementation()!
     mockFetch.mockImplementation((path, init) => String(path) === '/api/upstream/purchase-orders/direct' && init?.method === 'POST'
-      ? Promise.resolve({ id: 'new-order' }) : normal(path, init))
+      ? Promise.resolve({ id: 'new-order' })
+      : String(path) === '/api/upstream/purchase-orders/new-order'
+        ? Promise.resolve({ ...changeOrderDetail, id: 'new-order', no: 'UPO-NEW-001', status: 'DRAFT' })
+        : normal(path, init))
     window.history.replaceState({}, '', '/v2/supply-chain/procurement')
     const { container, root } = renderPage()
     await waitFor(() => container.textContent?.includes('发起采购单') ?? false)
@@ -753,6 +756,10 @@ describe('上游采购收货后补报', () => {
     const call = mockFetch.mock.calls.find(([path]) => String(path) === '/api/upstream/purchase-orders/direct')
     expect(call).toBeTruthy()
     expect(JSON.parse(String(call![1]?.body))).toMatchObject({ supplierId: postedReceipt.supplier.id, warehouseId: 'warehouse-1', lines: [{ upstreamSourceId: 'source-1', quantity: 1, unitPrice: 12.5 }] })
+    await waitFor(() => container.textContent?.includes('采购单明细 · UPO-NEW-001') ?? false)
+    expect(container.querySelector('[aria-label="发起采购单"]')).toBeNull()
+    expect(Array.from(container.querySelectorAll('button')).some(button => button.textContent === '查看采购单')).toBe(false)
+    expect(mockFetch.mock.calls.filter(([path]) => String(path) === '/api/upstream/purchase-orders/new-order')).toHaveLength(1)
     act(() => root.unmount()); container.remove()
   })
 

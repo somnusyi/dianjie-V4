@@ -4,6 +4,8 @@ import { useRouter } from 'next/navigation'
 import { apiFetch, getUser } from '@/lib/v2-auth'
 import type { ManagementResult, ManagementRow } from '@/lib/inventory-management'
 import { StocktakePrintPreview, type StocktakePrintDocument } from './stocktake-print-preview'
+import { ManagementTabs } from './management-tabs'
+import styles from './stocktake-workspace.module.css'
 
 type Mode = 'count' | 'multi-count'
 type BatchAction = 'submit' | 'approve' | 'final-review' | 'reverse-approval' | 'delete'
@@ -195,10 +197,13 @@ export function StocktakeWorkspace({ mode }: { mode: Mode }) {
     setStart(current); setEnd(current); setDateField('date'); setFilters({}); setPage(1)
   }
 
-  return <main className="space-y-4 p-5">
-    <header><h1 className="text-h1">{mode === 'count' ? '盘点单' : '多人盘点单'}</h1><p className="text-caption text-gray2">{mode === 'multi-count' ? '多人分别建立独立子单，审核后勾选同日同仓子单汇总正式盘点单。' : '审核即调整库存并生成盘盈/盘亏；复审后锁定。'}</p></header>
+  return <main className={styles.workspace}>
+    <div className={styles.breadcrumb}><span>货品与仓库 <span>/</span> 盘点管理</span><span>单据与库存</span></div>
+    <ManagementTabs activeId={mode} />
+    <div className={styles.content}>
+    <header className={styles.heading}><h1>{mode === 'count' ? '盘点单' : '多人盘点单'}</h1><p>{mode === 'multi-count' ? '多人分别建立独立子单，审核后勾选同日同仓子单汇总正式盘点单。' : '审核即调整库存并生成盘盈/盘亏；复审后锁定。'}</p></header>
     {error && <p role="alert" className="bg-red-50 p-3 text-red-700">{error}</p>}{notice && <p role="status" className="bg-green-50 p-3 text-green-700">{notice}</p>}
-    <section aria-label="盘点单筛选" className="flex flex-wrap items-end gap-2">
+    <section aria-label="盘点单筛选" className={styles.filters}>
       <label>日期类型<select value={dateField} onChange={event => setDateField(event.target.value)}><option value="date">盘点日期</option><option value="createdAt">创建时间</option></select></label>
       <label>开始<input type="date" value={start} onChange={event => setStart(event.target.value)} /></label>
       <label>结束<input type="date" value={end} onChange={event => setEnd(event.target.value)} /></label>
@@ -218,7 +223,7 @@ export function StocktakeWorkspace({ mode }: { mode: Mode }) {
       <label>备注<input aria-label="备注" value={filters.note || ''} onChange={event => setFilter('note', event.target.value)} /></label>
       <button type="button" onClick={resetFilters}>重置</button>
     </section>
-    <nav className="flex flex-wrap gap-2">
+    <nav className={styles.toolbar} aria-label="盘点单操作">
       <button disabled={!canWrite} onClick={() => router.push(`/v2/supply-chain/stocktake/work?create=1&from=${mode}`)}>新增</button>
       <button disabled={!chosen.length || chosen.some(row => !canManageRow(row)) || loading} onClick={() => void executeBatch('submit', chosen)}>批量提交</button>
       <button disabled={!chosen.length || !canAudit || loading} onClick={() => void executeBatch('approve', chosen)}>批量审核</button>
@@ -228,11 +233,12 @@ export function StocktakeWorkspace({ mode }: { mode: Mode }) {
       <button disabled={!chosen.length || chosen.length > 50 || printing} onClick={() => void preparePrint(chosen)}>打印选中单据</button>
       <button disabled={!rows.length} onClick={() => void exportList()}>导出列表</button>
     </nav>
-    <div className="flex flex-wrap items-center gap-3 text-caption"><span>已选 {selected.size} 张</span>{selected.size >= 100 && <span role="status" className="text-red-700">已达到每批100张上限</span>}{selected.size > 0 && <button onClick={() => setSelected(new Map())}>清空选择</button>}<label>每页<select value={pageSize} onChange={event => { setPageSize(Number(event.target.value)); setPage(1) }}><option value="20">20</option><option value="50">50</option><option value="100">100</option></select></label></div>
+    <div className={styles.selectionBar}><span>已选 {selected.size} 张</span>{selected.size >= 100 && <span role="status" className="text-red-700">已达到每批100张上限</span>}{selected.size > 0 && <button onClick={() => setSelected(new Map())}>清空选择</button>}<label>每页<select value={pageSize} onChange={event => { setPageSize(Number(event.target.value)); setPage(1) }}><option value="20">20</option><option value="50">50</option><option value="100">100</option></select></label></div>
     {batchResult && <aside aria-label="批量操作结果" className="space-y-2 border p-3"><div className="flex items-center justify-between"><strong>批量结果</strong><button onClick={() => setBatchResult(null)}>关闭</button></div><p>成功 {batchResult.summary.succeeded}，失败 {batchResult.summary.failed}，未处理 {batchResult.summary.skipped + batchResult.summary.pending}</p><ul>{batchResult.results.map(item => <li key={item.id}>{item.no}：{item.outcome === 'SUCCEEDED' ? '成功' : item.outcome === 'FAILED' ? '失败' : item.outcome === 'SKIPPED' ? '未处理' : '处理中'}{item.message ? `（${item.message}）` : ''}</li>)}</ul>{batchResult.results.some(item => ['FAILED', 'SKIPPED'].includes(item.outcome)) && <button onClick={() => void retryFailed()}>只重试失败/未处理项</button>}</aside>}
-    {loading ? <p>加载中…</p> : <div className="overflow-auto"><table><thead><tr><th>选择</th>{result?.columns.map(column => <th key={column.key}>{column.label}</th>)}<th>操作</th></tr></thead><tbody>{rows.map(row => { const id = idOf(row); const canManage = canManageRow(row); const canDelete = canManage && ['草稿', '盘点中', '已取消'].includes(String(row.status)); return <tr key={id}><td><input aria-label={`选择${row.no}`} type="checkbox" checked={selected.has(id)} disabled={!selected.has(id) && selected.size >= 100} onChange={event => toggle(row, event.target.checked)} /></td>{result?.columns.map(column => <td key={column.key}>{String(row[column.key] ?? '—')}</td>)}<td><button onClick={() => router.push(`/v2/supply-chain/stocktake/work?doc=${encodeURIComponent(id)}&from=${mode}`)}>{['草稿', '盘点中'].includes(String(row.status)) && canManage ? '编辑' : '查看'}</button>{mode === 'count' && <><button onClick={() => router.push(`/v2/supply-chain/stocktake/count/${encodeURIComponent(id)}?source=warehouse`)}>复盘差异</button>{canAudit && String(row.status) === '已审核' && String(row.review) === '未复审' && <button onClick={() => void executeBatch('reverse-approval', [selectedRow(row)])}>反审核</button>}</>}{mode === 'multi-count' && row.generatedStocktakeId && <button onClick={() => router.push(`/v2/supply-chain/stocktake/work?doc=${encodeURIComponent(String(row.generatedStocktakeId))}&from=count`)}>查看正式单</button>}<button disabled={printing} onClick={() => void preparePrint([selectedRow(row)])}>打印</button><button onClick={() => void exportDetail(row)}>导出明细</button>{canDelete && <button onClick={() => void executeBatch('delete', [selectedRow(row)])}>删除</button>}</td></tr> })}</tbody></table></div>}
-    <nav aria-label="分页" className="flex items-center gap-3"><button disabled={page <= 1 || loading} onClick={() => setPage(value => Math.max(1, value - 1))}>上一页</button><span>第 {result?.page || page} / {totalPages} 页，共 {result?.total || 0} 张</span><button disabled={page >= totalPages || loading} onClick={() => setPage(value => Math.min(totalPages, value + 1))}>下一页</button></nav>
+    {loading ? <p>加载中…</p> : <div className={styles.tableCard}><div className={styles.tableScroll}><table><thead><tr><th>选择</th>{result?.columns.map(column => <th key={column.key}>{column.label}</th>)}<th>操作</th></tr></thead><tbody>{rows.map(row => { const id = idOf(row); const canManage = canManageRow(row); const canDelete = canManage && ['草稿', '盘点中', '已取消'].includes(String(row.status)); return <tr key={id} data-selected={selected.has(id)}><td><input aria-label={`选择${row.no}`} type="checkbox" checked={selected.has(id)} disabled={!selected.has(id) && selected.size >= 100} onChange={event => toggle(row, event.target.checked)} /></td>{result?.columns.map(column => <td key={column.key}>{String(row[column.key] ?? '—')}</td>)}<td className={styles.operation}><div className={styles.rowActions}><button onClick={() => router.push(`/v2/supply-chain/stocktake/work?doc=${encodeURIComponent(id)}&from=${mode}`)}>{['草稿', '盘点中'].includes(String(row.status)) && canManage ? '编辑' : '查看'}</button>{mode === 'count' && <><button onClick={() => router.push(`/v2/supply-chain/stocktake/count/${encodeURIComponent(id)}?source=warehouse`)}>复盘差异</button>{canAudit && String(row.status) === '已审核' && String(row.review) === '未复审' && <button onClick={() => void executeBatch('reverse-approval', [selectedRow(row)])}>反审核</button>}</>}{mode === 'multi-count' && row.generatedStocktakeId && <button onClick={() => router.push(`/v2/supply-chain/stocktake/work?doc=${encodeURIComponent(String(row.generatedStocktakeId))}&from=count`)}>查看正式单</button>}<button disabled={printing} onClick={() => void preparePrint([selectedRow(row)])}>打印</button><button onClick={() => void exportDetail(row)}>导出明细</button>{canDelete && <button onClick={() => void executeBatch('delete', [selectedRow(row)])}>删除</button>}</div></td></tr> })}{rows.length === 0 && <tr><td className={styles.empty} colSpan={(result?.columns.length || 0) + 2}>暂无符合条件的盘点单</td></tr>}</tbody></table></div></div>}
+    <nav aria-label="分页" className={styles.pagination}><button disabled={page <= 1 || loading} onClick={() => setPage(value => Math.max(1, value - 1))}>上一页</button><span>第 {result?.page || page} / {totalPages} 页，共 {result?.total || 0} 张</span><button disabled={page >= totalPages || loading} onClick={() => setPage(value => Math.min(totalPages, value + 1))}>下一页</button></nav>
     <p className="text-caption text-gray2">打印状态表示当前版本是否完成过浏览器打印流程；浏览器无法证明打印机已实际出纸。</p>
     {preparedPrint && <StocktakePrintPreview documents={preparedPrint.documents} busy={printing} onComplete={completePrint} onAbandon={abandonPrint} />}
+    </div>
   </main>
 }

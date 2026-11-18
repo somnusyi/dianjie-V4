@@ -1130,11 +1130,8 @@ export default function UpstreamProcurementPage() {
       },
       sendToSupplier ? '采购单已发送供应商' : '采购单草稿已创建',
       async (created) => {
+        setShowOrderForm(false)
         await openOrderDetail(created)
-        setNoticeAction({
-          label: '查看采购单',
-          run: () => void openOrderDetail(created),
-        })
       }
     )
     if (succeeded) {
@@ -1198,6 +1195,7 @@ export default function UpstreamProcurementPage() {
       setViewingPurchaseReturn(null)
       setViewingStatement(null)
       if (!preserveTab && tab !== 'claims') setTab('orders')
+      if (mode === 'view') requestAnimationFrame(() => document.getElementById('purchase-order-detail')?.scrollIntoView?.({ behavior: 'smooth', block: 'start' }))
     } catch (reason: any) {
       setError(reason?.message || '采购单明细加载失败')
     }
@@ -1573,7 +1571,7 @@ export default function UpstreamProcurementPage() {
         )}
 
         {viewingOrder && (
-          <div className="mb-4">
+          <div id="purchase-order-detail" className="mb-4">
             <Panel title={`采购单明细 · ${viewingOrder.no}`} onClose={() => setViewingOrder(null)}>
               <div className="grid gap-2 rounded-xl bg-bg p-3 text-caption sm:grid-cols-2 lg:grid-cols-4">
                 <div>

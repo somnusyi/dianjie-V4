@@ -230,12 +230,13 @@ const directPurchaseOrderCreateSchema = z.object({
   note: z.string().trim().max(500).optional(),
   idempotencyKey: z.string().trim().min(8).max(160),
   lines: z.array(z.object({
-    upstreamSourceId: idSchema,
+    upstreamSourceId: idSchema.optional(),
+    historicalLineId: idSchema.optional(),
     quantity: decimalInput.refine(value => decimal(value).decimalPlaces() <= 6, '采购数量最多六位小数'),
     unitPrice: decimalInput.refine(value => decimal(value).decimalPlaces() <= 6, '本单单价最多六位小数'),
-  })).min(1).max(500),
+  }).strict().refine(line => Boolean(line.upstreamSourceId) !== Boolean(line.historicalLineId), '必须选择采购来源或历史商品')).min(1).max(500),
 }).strict().superRefine((data, ctx) => {
-  const ids = data.lines.map(line => line.upstreamSourceId)
+  const ids = data.lines.map(line => line.upstreamSourceId ? `source:${line.upstreamSourceId}` : `history:${line.historicalLineId}`)
   if (new Set(ids).size !== ids.length) ctx.addIssue({ code: 'custom', path: ['lines'], message: '采购商品不能重复' })
 })
 
@@ -1972,23 +1973,45 @@ export const upstreamProcurementRoutes: FastifyPluginAsync = async (app) => {
     if (!warehouse) return reply.status(400).send({ error: '总仓不存在或已停用' })
     try {
       const order = await prisma.$transaction(async tx => {
-        const sourceIds = d.lines.map(line => line.upstreamSourceId)
-        const sources = await tx.productUpstreamSource.findMany({
-          where: { id: { in: sourceIds }, tenantId, supplierId: d.supplierId, isActive: true },
-          include: { product: true },
-        })
+        const sourceIds = d.lines.flatMap(line => line.upstreamSourceId ? [line.upstreamSourceId] : [])
+        const historicalLineIds = d.lines.flatMap(line => line.historicalLineId ? [line.historicalLineId] : [])
+        const [sources, historicalLines] = await Promise.all([
+          sourceIds.length ? tx.productUpstreamSource.findMany({
+            where: { id: { in: sourceIds }, tenantId, supplierId: d.supplierId, isActive: true },
+            include: { product: true },
+          }) : Promise.resolve([]),
+          historicalLineIds.length ? tx.upstreamPurchaseOrderLine.findMany({
+            where: { id: { in: historicalLineIds }, tenantId, purchaseOrder: { supplierId: d.supplierId, status: { not: 'CANCELLED' } } },
+          }) : Promise.resolve([]),
+        ])
         if (sources.length !== sourceIds.length || sources.some(source => source.product.status !== 'ENABLED')) {
           throw Object.assign(new Error('采购商品不存在、已停用或不属于该供应商'), { statusCode: 400 })
         }
+        if (historicalLines.length !== historicalLineIds.length) {
+          throw Object.assign(new Error('历史采购商品不存在或不属于当前供应商'), { statusCode: 400 })
+        }
         const byId = new Map(sources.map(source => [source.id, source]))
+        const historicalById = new Map(historicalLines.map(line => [line.id, line]))
         let totalAmount = decimal(0)
         const lines = d.lines.map((input, index) => {
-          const source = byId.get(input.upstreamSourceId)!
           const quantity = decimal(input.quantity)
-          if (quantity.lessThan(source.minOrderQty)) throw Object.assign(new Error(`${source.product.name} 低于起订量`), { statusCode: 400 })
           const unitPrice = decimal(input.unitPrice)
           const lineAmount = money(quantity.times(unitPrice))
           totalAmount = totalAmount.plus(lineAmount)
+          if (input.historicalLineId) {
+            const line = historicalById.get(input.historicalLineId)!
+            return {
+              lineNo: index + 1, productId: line.productId,
+              productCodeSnapshot: line.productCodeSnapshot, productNameSnapshot: line.productNameSnapshot,
+              productSpecSnapshot: line.productSpecSnapshot, supplierSkuSnapshot: line.supplierSkuSnapshot,
+              purchaseUnit: line.purchaseUnit, inventoryUnit: line.inventoryUnit,
+              inventoryUnitsPerPurchaseUnit: line.inventoryUnitsPerPurchaseUnit,
+              orderedQty: quantity, unitPrice, taxRate: decimal(0),
+              amountWithoutTax: lineAmount, taxAmount: decimal(0), totalAmount: lineAmount,
+            }
+          }
+          const source = byId.get(input.upstreamSourceId!)!
+          if (quantity.lessThan(source.minOrderQty)) throw Object.assign(new Error(`${source.product.name} 低于起订量`), { statusCode: 400 })
           return {
             lineNo: index + 1, productId: source.productId,
             productCodeSnapshot: source.product.code, productNameSnapshot: source.product.name,

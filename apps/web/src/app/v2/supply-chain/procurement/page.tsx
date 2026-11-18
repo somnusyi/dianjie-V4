@@ -41,6 +41,7 @@ type Supplier = { id: string; no: string; name: string }
 type Warehouse = { id: string; code: string; name: string }
 type Source = {
   id: string
+  historicalLineId?: string
   supplierId: string
   purchaseUnit: string
   quotedUnitPrice: string | number | null
@@ -92,8 +93,11 @@ type Contract = {
 type OrderLine = {
   id: string
   productId: string
+  productCodeSnapshot?: string
   productNameSnapshot: string
   productSpecSnapshot?: string | null
+  inventoryUnit?: string
+  inventoryUnitsPerPurchaseUnit?: string | number
   purchaseUnit: string
   orderedQty: string | number
   confirmedQty?: string | number | null
@@ -471,10 +475,10 @@ export default function UpstreamProcurementPage() {
   const [orderProductPickerOpen, setOrderProductPickerOpen] = useState(false)
   const [orderHistory, setOrderHistory] = useState<Order[]>([])
   const [orderHistoryId, setOrderHistoryId] = useState('')
-  const [unavailableHistoryLines, setUnavailableHistoryLines] = useState<Array<OrderLine & { reason: string }>>([])
+  const [copiedHistoryNo, setCopiedHistoryNo] = useState('')
+  const [historySources, setHistorySources] = useState<Source[]>([])
   const [orderHistoryLoading, setOrderHistoryLoading] = useState(false)
   const [orderHistoryError, setOrderHistoryError] = useState(false)
-  const [pendingHistoryId, setPendingHistoryId] = useState('')
   const [claimingReceipt, setClaimingReceipt] = useState<ReceiptDetail | null>(null)
   const [postClaimType, setPostClaimType] = useState<'SHORTAGE' | 'POST_RECEIPT_DAMAGE'>('POST_RECEIPT_DAMAGE')
   const [postClaimDescription, setPostClaimDescription] = useState('')
@@ -979,9 +983,9 @@ export default function UpstreamProcurementPage() {
     setOrderProductPickerOpen(false)
     setOrderHistory([])
     setOrderHistoryId('')
-    setUnavailableHistoryLines([])
+    setCopiedHistoryNo('')
+    setHistorySources([])
     setOrderHistoryError(false)
-    setPendingHistoryId('')
     if (!id) return
     try {
       const setup = await apiFetch<{ sources: Source[] }>(`/api/upstream/setup-options?supplierId=${encodeURIComponent(id)}`)
@@ -1016,16 +1020,14 @@ export default function UpstreamProcurementPage() {
     setOrderProductQuery('')
   }
 
-  async function fillOrderFromHistory(id: string, replaceConfirmed = false) {
-    if (id && !replaceConfirmed && Object.keys(orderQuantities).length > 0) {
-      setOrderHistoryId(id)
-      setPendingHistoryId(id)
-      return
-    }
-    setPendingHistoryId('')
+  async function fillOrderFromHistory(id: string) {
     const requestId = orderSourceRequestRef.current
     setOrderHistoryId(id)
-    if (!id) { setUnavailableHistoryLines([]); return }
+    setCopiedHistoryNo('')
+    setHistorySources([])
+    setOrderQuantities({})
+    setOrderPrices({})
+    if (!id) return
     setOrderHistoryLoading(true)
     setError(null)
     try {
@@ -1034,22 +1036,34 @@ export default function UpstreamProcurementPage() {
       if (historical.supplierId !== orderSupplierId) throw new Error('历史采购单不属于当前供应商')
       const quantities: Record<string, string> = {}
       const prices: Record<string, string> = {}
-      const unavailable: Array<OrderLine & { reason: string }> = []
+      const copiedSources = (historical.lines || []).map(line => ({
+        id: `history:${line.id}`,
+        historicalLineId: line.id,
+        supplierId: historical.supplierId,
+        purchaseUnit: line.purchaseUnit,
+        quotedUnitPrice: line.unitPrice,
+        minOrderQty: 0,
+        inventoryUnitsPerPurchaseUnit: line.inventoryUnitsPerPurchaseUnit || 1,
+        product: {
+          id: line.productId,
+          code: line.productCodeSnapshot || '',
+          name: line.productNameSnapshot,
+          spec: line.productSpecSnapshot,
+          inventoryUnit: line.inventoryUnit,
+          unit: line.inventoryUnit || line.purchaseUnit,
+        },
+      }))
       for (const line of historical.lines || []) {
-        const source = orderSources.find(item => item.product.id === line.productId && item.purchaseUnit === line.purchaseUnit)
-        if (!source) {
-          const sameProduct = orderSources.some(item => item.product.id === line.productId)
-          unavailable.push({ ...line, reason: sameProduct ? '当前采购单位与历史单不同，需核对换算后重新选择' : '该商品已不在当前供应商的有效供货范围' })
-          continue
-        }
-        quantities[source.id] = String(line.orderedQty)
-        prices[source.id] = String(line.unitPrice)
+        quantities[`history:${line.id}`] = String(line.orderedQty)
+        prices[`history:${line.id}`] = String(line.unitPrice)
       }
+      setHistorySources(copiedSources)
       setOrderQuantities(quantities)
       setOrderPrices(prices)
-      setUnavailableHistoryLines(unavailable)
+      setOrderHistoryId('')
+      setCopiedHistoryNo(historical.no)
       if (warehouses.some(warehouse => warehouse.id === historical.warehouse.id)) setOrderWarehouseId(historical.warehouse.id)
-      setNotice(unavailable.length ? `已带入 ${Object.keys(quantities).length} 项；${unavailable.length} 项历史明细需核对，已显示在下方` : `已带入采购单 ${historical.no} 的商品、数量和单价`)
+      setNotice(`已带入采购单 ${historical.no} 的商品、数量、单位和单价`)
     } catch (reason: any) {
       setError(reason?.message || '历史采购单加载失败')
     } finally {
@@ -1079,7 +1093,8 @@ export default function UpstreamProcurementPage() {
     setOrderProductQuery('')
     setOrderNote('')
     setOrderHistoryId('')
-    setUnavailableHistoryLines([])
+    setCopiedHistoryNo('')
+    setHistorySources([])
     setOrderProductPickerOpen(false)
     setShowOrderForm(true)
     setTab('orders')
@@ -1087,10 +1102,10 @@ export default function UpstreamProcurementPage() {
 
   async function createOrder(sendToSupplier = false) {
     if (!orderSupplierId || !orderWarehouseId) return setError('请选择供应商和收货总仓')
-    const lines = orderSources
+    const lines = [...orderSources, ...historySources]
       .filter(source => Object.hasOwn(orderQuantities, source.id))
       .map(source => ({
-        upstreamSourceId: source.id,
+        ...(source.historicalLineId ? { historicalLineId: source.historicalLineId } : { upstreamSourceId: source.id }),
         quantity: Number(orderQuantities[source.id]),
         unitPrice: Number(orderPrices[source.id]),
       }))
@@ -1127,6 +1142,8 @@ export default function UpstreamProcurementPage() {
       setOrderQuantities({})
       setOrderPrices({})
       setOrderHistoryId('')
+      setCopiedHistoryNo('')
+      setHistorySources([])
       setOrderNote('')
     }
   }
@@ -1854,7 +1871,7 @@ export default function UpstreamProcurementPage() {
                     </Field>
                     <Field label="期望到货日"><input type="date" value={orderArrival} onChange={event => setOrderArrival(event.target.value)} className={PROCUREMENT_SEARCH_FIELD} /></Field>
                   </div>
-                  <div className="mt-4 max-w-[354px]"><Field label="带入历史采购单"><select className={PROCUREMENT_SEARCH_FIELD} aria-label="选择历史采购单" value={orderHistoryId} disabled={!orderSupplierId || orderHistoryLoading || orderHistoryError || orderHistory.length === 0} onChange={event => void fillOrderFromHistory(event.target.value)}><option value="">{!orderSupplierId ? '请先选择供应商' : orderHistoryLoading ? '加载中…' : orderHistoryError ? '历史订单加载失败' : orderHistory.length === 0 ? '暂无历史订单' : '不带入'}</option>{orderHistory.map(order => <option key={order.id} value={order.id}>{order.no} · {order.createdAt ? shortDate(order.createdAt) : '—'} · {order._count?.lines || 0} 项</option>)}</select></Field>{orderHistoryError && <button type="button" className="mt-2 text-button text-accent" onClick={() => void reloadOrderHistory(orderSupplierId)}>重试加载</button>}{pendingHistoryId && <div className="mt-2 flex items-center gap-3 text-caption"><span>带入后将替换当前商品和单价</span><button type="button" className="text-accent" onClick={() => void fillOrderFromHistory(pendingHistoryId, true)}>继续带入</button><button type="button" onClick={() => setPendingHistoryId('')}>取消</button></div>}</div>
+                  <div className="mt-4 max-w-[354px]"><Field label="带入历史采购单"><select className={PROCUREMENT_SEARCH_FIELD} aria-label="选择历史采购单" value={orderHistoryId} disabled={!orderSupplierId || orderHistoryLoading || orderHistoryError || orderHistory.length === 0} onChange={event => void fillOrderFromHistory(event.target.value)}><option value="">{!orderSupplierId ? '请先选择供应商' : orderHistoryLoading ? '加载中…' : orderHistoryError ? '历史订单加载失败' : orderHistory.length === 0 ? '暂无历史订单' : '请选择历史采购单'}</option>{orderHistory.map(order => <option key={order.id} value={order.id}>{order.no} · {order.createdAt ? shortDate(order.createdAt) : '—'} · {order._count?.lines || 0} 项</option>)}</select></Field>{copiedHistoryNo && <p className="mt-2 text-caption text-gray2">已带入 {copiedHistoryNo}；再次选择可恢复该单全部商品</p>}{orderHistoryError && <button type="button" className="mt-2 text-button text-accent" onClick={() => void reloadOrderHistory(orderSupplierId)}>重试加载</button>}</div>
                 </div>
 
                 <div className="px-4 py-4 lg:px-5" aria-label="采购商品选择">
@@ -1862,12 +1879,11 @@ export default function UpstreamProcurementPage() {
                     <h2 className="text-h3">商品明细</h2>
                     <button type="button" aria-label="打开采购商品选择" disabled={!orderSupplierId || orderSources.length === 0} onClick={() => { setOrderProductQuery(''); setOrderProductPickerOpen(true) }} className="rounded-lg border border-border bg-white px-4 py-2 text-button text-amber-fg disabled:cursor-not-allowed disabled:text-gray3">＋ 添加商品</button>
                   </div>
-                  {unavailableHistoryLines.length > 0 && <div className="mb-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-caption" aria-label="未能带入的历史采购明细"><b>历史单中需核对的商品（未加入本单）</b><ul className="mt-2 space-y-2">{unavailableHistoryLines.map(line => <li key={line.id}>{line.productNameSnapshot} · {line.orderedQty} {line.purchaseUnit} · {line.unitPrice} 元/{line.purchaseUnit}：{line.reason}</li>)}</ul></div>}
                   <div className="overflow-x-auto rounded-lg border border-border">
                     <table className="w-full min-w-[740px] text-left text-caption">
                       <thead className="bg-bg"><tr className="border-b border-border"><th className="w-14 px-3 py-2.5">序号</th><th className="min-w-52 px-3 py-2.5">商品</th><th className="w-40 px-3 py-2.5">采购数量</th><th className="w-44 px-3 py-2.5">本单单价</th><th className="w-28 px-3 py-2.5 text-right">小计</th><th className="w-16 px-3 py-2.5 text-right">操作</th></tr></thead>
                       <tbody>
-                        {orderSources.filter(source => Object.hasOwn(orderQuantities, source.id)).map((source, index) => <tr key={source.id} className="border-b border-border last:border-b-0">
+                        {[...orderSources, ...historySources].filter(source => Object.hasOwn(orderQuantities, source.id)).map((source, index) => <tr key={source.id} className="border-b border-border last:border-b-0">
                           <td className="px-3 py-2.5 text-gray3">{index + 1}</td>
                           <td className="px-3 py-2.5"><b className="text-body">{source.product.name}</b><div className="mt-0.5 text-micro text-gray3">{source.product.code} · {source.product.spec || '—'}</div></td>
                           <td className="px-3 py-2.5"><div className="flex items-center gap-2"><input type="number" onWheel={event => event.currentTarget.blur()} aria-label={`${source.product.name}采购数量`} min={String(source.minOrderQty)} step="any" value={orderQuantities[source.id] || ''} onChange={event => setOrderQuantities(current => ({ ...current, [source.id]: event.target.value }))} className="input !w-24 !py-1.5 text-right font-num" /><span className="whitespace-nowrap text-gray2">{source.purchaseUnit}</span></div></td>
@@ -1883,7 +1899,7 @@ export default function UpstreamProcurementPage() {
 
                 <div className="border-t border-border px-4 py-4 lg:px-5"><Field label="备注"><input className="input" value={orderNote} maxLength={500} onChange={event => setOrderNote(event.target.value)} placeholder="选填" /></Field></div>
                 <div className="sticky bottom-0 z-10 flex flex-wrap items-center justify-between gap-3 border-t border-border bg-white px-4 py-3 lg:px-5">
-                  <div className="text-caption text-gray2">共 {Object.keys(orderQuantities).length} 项 <b className="ml-3 text-h3 text-ink">{money(orderSources.filter(source => Object.hasOwn(orderQuantities, source.id)).reduce((sum, source) => sum + (Number(orderQuantities[source.id]) || 0) * (Number(orderPrices[source.id]) || 0), 0))}</b></div>
+                  <div className="text-caption text-gray2">共 {Object.keys(orderQuantities).length} 项 <b className="ml-3 text-h3 text-ink">{money([...orderSources, ...historySources].filter(source => Object.hasOwn(orderQuantities, source.id)).reduce((sum, source) => sum + (Number(orderQuantities[source.id]) || 0) * (Number(orderPrices[source.id]) || 0), 0))}</b></div>
                   <div className="flex flex-wrap gap-2"><a href="/v2/supply-chain/procurement/orders" className="rounded-lg border border-border bg-white px-4 py-2 text-button">取消</a><ActionButton tone="light" onClick={() => void createOrder()} disabled={working === 'create-order' || !orderSupplierId}>保存草稿</ActionButton><ActionButton onClick={() => void createOrder(true)} disabled={working === 'create-order' || !orderSupplierId}>创建并发送供应商</ActionButton></div>
                 </div>
               </section>

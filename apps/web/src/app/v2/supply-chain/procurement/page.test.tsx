@@ -756,12 +756,46 @@ describe('上游采购收货后补报', () => {
     act(() => root.unmount()); container.remove()
   })
 
-  it('历史单商品与当前供货单位不匹配时仍显示历史明细且不误带入数量', async () => {
-    const source = { id: 'source-1', supplierId: postedReceipt.supplier.id, purchaseUnit: '袋', quotedUnitPrice: 8,
+  it('历史单商品与当前供货单位不匹配时原样加入本单', async () => {
+    const source = { id: 'source-1', supplierId: postedReceipt.supplier.id, purchaseUnit: '箱', quotedUnitPrice: 100,
       minOrderQty: 1, inventoryUnitsPerPurchaseUnit: 1,
-      product: { id: 'product-1', code: 'P001', name: '人工见手青', spec: 'kg', inventoryUnit: 'kg', unit: 'kg' } }
-    const historical = { ...changeOrder, status: 'RECEIVED', lines: [{ id: 'historical-line', productId: 'product-1', productNameSnapshot: '人工见手青', purchaseUnit: '箱', orderedQty: 3, unitPrice: 50 }] }
-    installPageMock({ orders: [historical], orderDetail: historical, sources: [source], warehouses: [{ id: 'warehouse-1', code: 'WH001', name: '供应链总仓' }] })
+      product: { id: 'product-1', code: 'P001', name: 'UAT 云南小土豆', spec: 'kg', inventoryUnit: 'kg', unit: 'kg' } }
+    const otherSource = { ...source, id: 'source-2', product: { ...source.product, id: 'product-2', code: 'P002', name: '人工见手青' } }
+    const historical = { ...changeOrder, status: 'RECEIVED', lines: [{ id: 'historical-line', productId: 'product-1', productNameSnapshot: 'UAT 云南小土豆', purchaseUnit: 'kg', inventoryUnit: 'kg', inventoryUnitsPerPurchaseUnit: 1, orderedQty: 18, unitPrice: 8.5 }] }
+    installPageMock({ orders: [historical], orderDetail: historical, sources: [source, otherSource], warehouses: [{ id: 'warehouse-1', code: 'WH001', name: '供应链总仓' }] })
+    const normal = mockFetch.getMockImplementation()!
+    mockFetch.mockImplementation((path, init) => String(path) === '/api/upstream/purchase-orders/direct' && init?.method === 'POST'
+      ? Promise.resolve({ id: 'copied-order' }) : normal(path, init))
+    const { container, root } = renderPage()
+    await waitFor(() => Boolean(container.querySelector('select[aria-label="采购供应商"]')))
+    const supplier = container.querySelector<HTMLSelectElement>('select[aria-label="采购供应商"]')!
+    act(() => { supplier.value = postedReceipt.supplier.id; supplier.dispatchEvent(new Event('change', { bubbles: true })) })
+    await waitFor(() => Boolean(container.querySelector('select[aria-label="选择历史采购单"] option[value="order-1"]')))
+    act(() => (container.querySelector('button[aria-label="打开采购商品选择"]') as HTMLButtonElement).click())
+    change(container.querySelector<HTMLInputElement>('input[aria-label="搜索采购商品"]')!, '见手青')
+    await waitFor(() => Boolean(container.querySelector('button[aria-label="添加采购商品 人工见手青"]')))
+    act(() => (container.querySelector('button[aria-label="添加采购商品 人工见手青"]') as HTMLButtonElement).click())
+    const history = container.querySelector<HTMLSelectElement>('select[aria-label="选择历史采购单"]')!
+    act(() => { history.value = 'order-1'; history.dispatchEvent(new Event('change', { bubbles: true })) })
+    await waitFor(() => (container.querySelector('input[aria-label="UAT 云南小土豆采购数量"]') as HTMLInputElement)?.value === '18')
+    expect(container.querySelectorAll('input[aria-label="UAT 云南小土豆采购数量"]')).toHaveLength(1)
+    expect(container.querySelector('input[aria-label="人工见手青采购数量"]')).toBeNull()
+    expect((container.querySelector('input[aria-label="UAT 云南小土豆本单单价"]') as HTMLInputElement).value).toBe('8.5')
+    expect(container.querySelector('[aria-label="采购商品选择"]')?.textContent).toContain('kg')
+    expect(container.querySelector('[aria-label="未能带入的历史采购明细"]')).toBeNull()
+    await act(async () => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '保存草稿')!.click())
+    const createCall = mockFetch.mock.calls.find(([path]) => String(path) === '/api/upstream/purchase-orders/direct')
+    expect(JSON.parse(String(createCall?.[1]?.body)).lines).toEqual([{ historicalLineId: 'historical-line', quantity: 18, unitPrice: 8.5 }])
+    act(() => root.unmount()); container.remove()
+  })
+
+  it('供应商已无有效供货来源时仍按所选历史单带入商品', async () => {
+    const historical = { ...changeOrder, status: 'RECEIVED', lines: [{ id: 'historical-line-2', productId: 'product-1', productNameSnapshot: 'UAT 云南小土豆', purchaseUnit: 'kg', inventoryUnit: 'kg', inventoryUnitsPerPurchaseUnit: 1, orderedQty: 19, unitPrice: 8.5 }] }
+    const second = { ...historical, id: 'order-2', no: 'UT261109-UP-10', lines: [{ ...historical.lines[0], id: 'historical-line-3', orderedQty: 20 }] }
+    installPageMock({ orders: [historical, second], orderDetail: historical, sources: [], warehouses: [{ id: 'warehouse-1', code: 'WH001', name: '供应链总仓' }] })
+    const normal = mockFetch.getMockImplementation()!
+    mockFetch.mockImplementation((path, init) => String(path) === '/api/upstream/purchase-orders/order-2'
+      ? Promise.resolve(second) : normal(path, init))
     const { container, root } = renderPage()
     await waitFor(() => Boolean(container.querySelector('select[aria-label="采购供应商"]')))
     const supplier = container.querySelector<HTMLSelectElement>('select[aria-label="采购供应商"]')!
@@ -769,10 +803,34 @@ describe('上游采购收货后补报', () => {
     await waitFor(() => Boolean(container.querySelector('select[aria-label="选择历史采购单"] option[value="order-1"]')))
     const history = container.querySelector<HTMLSelectElement>('select[aria-label="选择历史采购单"]')!
     act(() => { history.value = 'order-1'; history.dispatchEvent(new Event('change', { bubbles: true })) })
-    await waitFor(() => Boolean(container.querySelector('[aria-label="未能带入的历史采购明细"]')))
-    expect(container.querySelector('[aria-label="未能带入的历史采购明细"]')?.textContent).toContain('人工见手青 · 3 箱 · 50 元/箱')
-    expect(container.querySelector('[aria-label="未能带入的历史采购明细"]')?.textContent).toContain('当前采购单位与历史单不同')
-    expect(container.querySelector('input[aria-label="人工见手青采购数量"]')).toBeNull()
+    await waitFor(() => (container.querySelector('input[aria-label="UAT 云南小土豆采购数量"]') as HTMLInputElement)?.value === '19')
+    expect((container.querySelector('input[aria-label="UAT 云南小土豆本单单价"]') as HTMLInputElement).value).toBe('8.5')
+    act(() => { history.value = 'order-2'; history.dispatchEvent(new Event('change', { bubbles: true })) })
+    await waitFor(() => (container.querySelector('input[aria-label="UAT 云南小土豆采购数量"]') as HTMLInputElement)?.value === '20')
+    expect(container.querySelectorAll('input[aria-label="UAT 云南小土豆采购数量"]')).toHaveLength(1)
+    act(() => root.unmount()); container.remove()
+  })
+
+  it('四个历史商品移除一个后重选同一张单会恢复四个', async () => {
+    const historical = { ...changeOrder, status: 'RECEIVED', _count: { lines: 4, shipments: 0, receipts: 0 }, lines: ['小土豆', '见手青', '羊肚菌', '赤松茸'].map((name, index) => ({
+      id: `historical-line-${index}`, productId: `product-${index}`, productNameSnapshot: name,
+      purchaseUnit: 'kg', inventoryUnit: 'kg', inventoryUnitsPerPurchaseUnit: 1, orderedQty: index + 1, unitPrice: 8.5,
+    })) }
+    installPageMock({ orders: [historical], orderDetail: historical, sources: [], warehouses: [{ id: 'warehouse-1', code: 'WH001', name: '供应链总仓' }] })
+    const { container, root } = renderPage()
+    await waitFor(() => Boolean(container.querySelector('select[aria-label="采购供应商"]')))
+    const supplier = container.querySelector<HTMLSelectElement>('select[aria-label="采购供应商"]')!
+    act(() => { supplier.value = postedReceipt.supplier.id; supplier.dispatchEvent(new Event('change', { bubbles: true })) })
+    await waitFor(() => Boolean(container.querySelector('select[aria-label="选择历史采购单"] option[value="order-1"]')))
+    const history = container.querySelector<HTMLSelectElement>('select[aria-label="选择历史采购单"]')!
+    act(() => { history.value = 'order-1'; history.dispatchEvent(new Event('change', { bubbles: true })) })
+    await waitFor(() => container.querySelectorAll('input[aria-label$="采购数量"]').length === 4)
+    expect(history.value).toBe('')
+    act(() => (container.querySelector('button[aria-label="移除采购商品 见手青"]') as HTMLButtonElement).click())
+    expect(container.querySelectorAll('input[aria-label$="采购数量"]')).toHaveLength(3)
+    act(() => { history.value = 'order-1'; history.dispatchEvent(new Event('change', { bubbles: true })) })
+    await waitFor(() => container.querySelectorAll('input[aria-label$="采购数量"]').length === 4)
+    expect((container.querySelector('input[aria-label="见手青采购数量"]') as HTMLInputElement).value).toBe('2')
     act(() => root.unmount()); container.remove()
   })
 

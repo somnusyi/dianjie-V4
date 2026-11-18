@@ -3,7 +3,7 @@ import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { Prisma } from '@dianjie/db'
 
 const mocks = vi.hoisted(() => ({
-  supplier: vi.fn(), warehouse: vi.fn(), sources: vi.fn(), create: vi.fn(), event: vi.fn(), log: vi.fn(), transaction: vi.fn(),
+  supplier: vi.fn(), warehouse: vi.fn(), sources: vi.fn(), historicalLines: vi.fn(), create: vi.fn(), event: vi.fn(), log: vi.fn(), transaction: vi.fn(),
 }))
 vi.mock('@dianjie/db', async original => ({
   ...await original<typeof import('@dianjie/db')>(),
@@ -37,9 +37,11 @@ beforeEach(() => {
     inventoryUnitsPerPurchaseUnit: d(3), minOrderQty: d(2),
     product: { code: 'P001', name: '香菇', spec: '3袋/箱', status: 'ENABLED', inventoryUnit: '袋', unit: '袋' },
   }])
+  mocks.historicalLines.mockResolvedValue([])
   mocks.create.mockImplementation(async ({ data }: any) => ({ id: 'order-a', ...data }))
   mocks.transaction.mockImplementation(async (work: any) => work({
     productUpstreamSource: { findMany: mocks.sources },
+    upstreamPurchaseOrderLine: { findMany: mocks.historicalLines },
     upstreamPurchaseOrder: { create: mocks.create },
     upstreamPurchaseOrderEvent: { create: mocks.event }, opLog: { create: mocks.log },
   }))
@@ -77,5 +79,30 @@ describe('direct upstream purchase order', () => {
     expect((await app.inject({ method: 'POST', url: '/api/upstream/purchase-orders/direct', payload: noPrice })).statusCode).toBe(400)
     expect((await app.inject({ method: 'POST', url: '/api/upstream/purchase-orders/direct', payload: { ...payload, lines: [payload.lines[0], payload.lines[0]] } })).statusCode).toBe(400)
     expect(mocks.transaction).not.toHaveBeenCalled()
+  })
+  it('copies the selected historical line with its original purchase unit and conversion', async () => {
+    mocks.historicalLines.mockResolvedValueOnce([{
+      id: 'historical-a', productId: 'product-a', productCodeSnapshot: 'P001', productNameSnapshot: '云南小土豆',
+      productSpecSnapshot: '18kg/箱', supplierSkuSnapshot: null, purchaseUnit: 'kg', inventoryUnit: 'kg',
+      inventoryUnitsPerPurchaseUnit: d(1),
+    }])
+    const response = await app.inject({ method: 'POST', url: '/api/upstream/purchase-orders/direct', payload: {
+      ...payload, lines: [{ historicalLineId: 'historical-a', quantity: 18, unitPrice: 8.5 }],
+    } })
+    expect(response.statusCode).toBe(201)
+    expect(mocks.sources).not.toHaveBeenCalled()
+    expect(mocks.historicalLines.mock.calls[0][0].where).toMatchObject({
+      tenantId: 'tenant-a', purchaseOrder: { supplierId: 'supplier-a', status: { not: 'CANCELLED' } },
+    })
+    expect(mocks.create.mock.calls[0][0].data.lines.create[0]).toMatchObject({
+      productId: 'product-a', purchaseUnit: 'kg', inventoryUnit: 'kg', orderedQty: d(18), unitPrice: d(8.5),
+    })
+  })
+  it('does not copy a historical line outside the current supplier', async () => {
+    const response = await app.inject({ method: 'POST', url: '/api/upstream/purchase-orders/direct', payload: {
+      ...payload, lines: [{ historicalLineId: 'other-supplier-line', quantity: 1, unitPrice: 8.5 }],
+    } })
+    expect(response.statusCode).toBe(400)
+    expect(mocks.create).not.toHaveBeenCalled()
   })
 })

@@ -1,0 +1,37 @@
+{
+  "version": "1.3.4-hotfix.3",
+  "businessVersion": "1.3.4",
+  "status": "released_production_and_uat",
+  "sourceCommit": "9b9c53fd7d6fdc0d530d6cec178478e1ec393f2b",
+  "tag": "v1.3.4-hotfix.3",
+  "uat": {
+    "apiDeployedAt": "2026-11-18T02:33:37.856884+00:00",
+    "webDeployedAt": "2026-11-18T02:33:58.471976+00:00",
+    "apiImageId": "sha256:18a5726923904106dd67757c090f038574cf3454b7c2f11a509bb51163736064",
+    "webImageId": "sha256:84566921d7f17b7d82a5794990b8d7773562eab2b61cf206c347dabec3a35559",
+    "webBuildId": "oMn0oErs6h8ztyLOq4pIZ",
+    "healthy": true,
+    "publicProcurementChunk": "2886-8a69c204de74f4fc.js"
+  },
+  "production": {
+    "apiDeployedAt": "2026-11-18T02:35:22.386197+00:00",
+    "webDeployedAt": "2026-11-18T02:35:39.624293+00:00",
+    "apiImageId": "sha256:18a5726923904106dd67757c090f038574cf3454b7c2f11a509bb51163736064",
+    "webImageId": "sha256:43669d28dcba9efd6c330ae8bb885090388607b4ba8f20500f161b0ac68ffd9b",
+    "webBuildId": "Z6Z8xju87eCQPJbQJtReW",
+    "healthy": true,
+    "publicProcurementChunk": "2886-8a69c204de74f4fc.js"
+  },
+  "pageTestsPassed": 26,
+  "apiTestsPassed": 6,
+  "databaseMigrations": 0,
+  "databaseImports": 0,
+  "authenticatedHistoryCopySmoke": "pending_business_user_review",
+  "rollbackContainers": [
+    "dianjie-uat-api-before-historyfix3",
+    "dianjie-uat-web-before-historyfix3",
+    "dianjie-production-api-before-historyfix3",
+    "dianjie-production-web-before-historyfix3"
+  ],
+  "remoteStatus": "local_release_tag_not_pushed"
+}

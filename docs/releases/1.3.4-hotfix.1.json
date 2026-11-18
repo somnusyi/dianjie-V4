@@ -1,0 +1,16 @@
+{
+  "version": "1.3.4-hotfix.1",
+  "businessVersion": "1.3.4",
+  "status": "released_production_and_uat",
+  "sourceCommit": "5d98a92440d8ee7891443bd51fe0ad76895148ce",
+  "tag": "v1.3.4-hotfix.1",
+  "apiImageId": "sha256:e92ccc18b669e10c5b90d7c65c866d9afbad950d9294fc1d77215486348baa27",
+  "apiRouteSha256": "3f442df2f103d92d4d670e7683995aee75e45b52e9260e3c7cdd53b05bf1242f",
+  "validation": { "directPurchaseOrderTestsPassed": 4, "apiBuild": "passed", "nodeSyntax": "passed" },
+  "uat": { "deployedAt": "2026-11-18T01:37:17.571551+00:00", "healthy": true },
+  "production": { "deployedAt": "2026-11-18T01:37:33.309738+00:00", "healthy": true },
+  "databaseMigrations": 0,
+  "databaseImports": 0,
+  "webImageChanged": false,
+  "authenticatedCreateSmoke": "pending_business_user_retry"
+}

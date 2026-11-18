@@ -81,6 +81,15 @@
       "document": "docs/releases/1.3.4-hotfix.1.md",
       "status": "released_production_and_uat",
       "remoteStatus": "local_release_tag_not_pushed"
+    },
+    {
+      "version": "1.3.4-hotfix.2",
+      "businessVersion": "1.3.4",
+      "tag": "v1.3.4-hotfix.2",
+      "commit": "4cec60442a2b6cdcb9c0253164e2a0beee7c6504",
+      "document": "docs/releases/1.3.4-hotfix.2.md",
+      "status": "released_production_and_uat",
+      "remoteStatus": "local_release_tag_not_pushed"
     }
   ],
   "documentationRemoteStatus": "1.3.4_deployed_tag_and_evidence_local_not_pushed"

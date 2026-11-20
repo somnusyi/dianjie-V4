@@ -21,9 +21,7 @@
   html{scroll-behavior:smooth}
   body{margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
        background:var(--bg);color:var(--ink);line-height:1.75;font-size:15px;-webkit-font-smoothing:antialiased}
-  /* progress bar */
   #progress{position:fixed;top:0;left:0;height:3px;background:linear-gradient(90deg,var(--food),var(--stock),var(--scm),var(--fin));width:0;z-index:99;transition:width .1s}
-  /* layout */
   .wrap{display:flex;max-width:1400px;margin:0 auto}
   nav{position:sticky;top:0;align-self:flex-start;width:262px;height:100vh;overflow-y:auto;padding:26px 16px 40px;
       background:var(--surface);border-right:1px solid var(--line);flex-shrink:0}
@@ -34,7 +32,6 @@
   nav .sep{height:1px;background:var(--line);margin:14px 10px}
   nav .domain-dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px;vertical-align:middle}
   main{flex:1;min-width:0;padding:0 56px 100px}
-  /* hero */
   .hero{padding:56px 0 34px;border-bottom:1px solid var(--line);margin-bottom:42px}
   .hero .kicker{display:inline-block;background:#eef2ff;color:#3730a3;font-size:12px;font-weight:700;padding:5px 12px;border-radius:20px;letter-spacing:.05em}
   .hero h1{font-size:40px;line-height:1.2;margin:16px 0 10px;letter-spacing:-.02em}
@@ -42,7 +39,6 @@
   .hero .meta{display:flex;gap:22px;margin-top:24px;flex-wrap:wrap}
   .hero .meta div{font-size:12.5px;color:var(--muted)}
   .hero .meta b{display:block;font-size:20px;color:var(--ink)}
-  /* sections */
   section{scroll-margin-top:24px;margin-bottom:56px}
   h2.sec{font-size:27px;margin:0 0 6px;display:flex;align-items:center;gap:12px;letter-spacing:-.01em}
   h2.sec .num{width:38px;height:38px;border-radius:11px;display:flex;align-items:center;justify-content:center;
@@ -50,7 +46,6 @@
   .sec-sub{color:var(--muted);margin:0 0 24px 50px;font-size:14px}
   h3{font-size:18px;margin:30px 0 10px}
   p{margin:10px 0}
-  /* cards */
   .card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:22px 24px;box-shadow:var(--shadow);margin:16px 0}
   .grid{display:grid;gap:14px}
   .grid.cols-2{grid-template-columns:repeat(2,1fr)}
@@ -58,7 +53,6 @@
   .grid.cols-4{grid-template-columns:repeat(4,1fr)}
   @media(max-width:1050px){.grid.cols-4{grid-template-columns:repeat(2,1fr)}main{padding:0 26px 80px}nav{display:none}}
   @media(max-width:680px){.grid.cols-2,.grid.cols-3,.grid.cols-4{grid-template-columns:1fr}}
-  /* stat / concept cards */
   .concept{border-left:4px solid var(--line);border-radius:10px;padding:16px 18px;background:var(--surface);box-shadow:var(--shadow)}
   .concept h4{margin:0 0 6px;font-size:15px}
   .concept p{margin:0;font-size:13.5px;color:#4b5563}
@@ -66,28 +60,23 @@
   .stock{border-color:var(--stock)} .stock h4{color:var(--stock)}
   .scm{border-color:var(--scm)} .scm h4{color:var(--scm)}
   .fin{border-color:var(--fin)} .fin h4{color:var(--fin)}
-  /* callouts */
   .note,.tip,.warn,.danger{border-radius:10px;padding:14px 18px;margin:16px 0;font-size:14px;border:1px solid transparent}
   .note{background:#eef2ff;border-color:#dbe3ff;color:#3730a3}
   .tip{background:var(--stock-bg);border-color:#bfe6df;color:#0b6e64}
   .warn{background:#fff8e8;border-color:#f5dfa8;color:#8a5a00}
   .danger{background:var(--accent-bg);border-color:#f3c9c6;color:#a52a25}
   .note b,.tip b,.warn b,.danger b{display:block;margin-bottom:2px}
-  /* formula */
   .formula{background:#1f2430;color:#e8edf5;border-radius:12px;padding:18px 22px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
            font-size:14px;line-height:1.9;overflow-x:auto;white-space:pre-wrap}
   .formula .hl{color:#7dd3a8}
-  /* tables */
   table{width:100%;border-collapse:collapse;margin:16px 0;font-size:13.5px;background:var(--surface);border-radius:12px;overflow:hidden;box-shadow:var(--shadow)}
   th{background:#f3f5f9;text-align:left;padding:12px 14px;font-weight:600;color:#374151;font-size:12.5px;letter-spacing:.02em}
   td{padding:11px 14px;border-top:1px solid var(--line);vertical-align:top;color:#4b5563}
   tr:hover td{background:#fafbfc}
   td b{color:var(--ink)}
-  /* mermaid */
   .diagram{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:22px;box-shadow:var(--shadow);margin:18px 0;overflow-x:auto}
   .mermaid{text-align:center}
   .mermaid svg{max-width:100%}
-  /* timeline */
   .timeline{position:relative;margin:24px 0 24px 8px;padding-left:30px}
   .timeline::before{content:"";position:absolute;left:7px;top:6px;bottom:6px;width:2px;background:linear-gradient(var(--scm),var(--fin))}
   .step{position:relative;margin-bottom:22px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px 20px;box-shadow:var(--shadow)}
@@ -97,18 +86,14 @@
   .step p{margin:4px 0;font-size:13.5px;color:#4b5563}
   .step .kv{font-size:13px;color:var(--muted)}
   .step .kv b{color:var(--ink)}
-  /* details */
   details{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:12px 16px;margin:10px 0;cursor:pointer}
   details summary{font-weight:600;color:var(--ink);outline:none}
   details[open] summary{margin-bottom:10px;color:var(--scm)}
   details p{font-size:13.5px;color:#4b5563;margin:6px 0}
-  /* quiz */
   .quiz{background:linear-gradient(135deg,#f3edff,#ecf3ff);border:1px solid #d9d0f5;border-radius:var(--radius);padding:24px 28px;margin:18px 0}
   .quiz h3{margin-top:0;color:var(--fin)}
-  /* misc */
   .tag{display:inline-block;font-size:11px;font-weight:600;padding:2px 9px;border-radius:6px;margin:0 4px 4px 0}
-  .t-food{background:var(--food-bg);color:var(--food)} .t-stock{background:var(--stock-bg);color:var(--stock)}
-  .t-scm{background:var(--scm-bg);color:var(--scm)} .t-fin{background:var(--fin-bg);color:var(--fin)}
+  .t-scm{background:var(--scm-bg);color:var(--scm)}
   .pill{display:inline-block;background:#eef2ff;color:#3730a3;font-size:11px;font-weight:700;padding:3px 9px;border-radius:6px}
   .big-quote{font-size:19px;line-height:1.7;color:var(--ink);font-weight:600;border-left:4px solid var(--accent);padding:6px 0 6px 20px;margin:20px 0}
   ul.clean{padding-left:20px;margin:10px 0} ul.clean li{margin:6px 0;color:#4b5563}
@@ -116,7 +101,6 @@
   #top{position:fixed;right:26px;bottom:26px;width:42px;height:42px;border-radius:50%;background:var(--ink);color:#fff;border:none;
        cursor:pointer;font-size:18px;box-shadow:var(--shadow);opacity:0;pointer-events:none;transition:.2s;z-index:50}
   #top.show{opacity:1;pointer-events:auto}
-  code{background:#eef1f6;padding:1px 6px;border-radius:5px;font-family:ui-monospace,Menlo,monospace;font-size:12.5px;color:#b1305a}
 </style>
 </head>
 <body>
@@ -132,7 +116,7 @@
   <a href="#s4"><span class="domain-dot" style="background:var(--scm)"></span>4 · 供应链与门店常识</a>
   <a href="#s5"><span class="domain-dot" style="background:var(--fin)"></span>5 · 财务常识</a>
   <div class="sep"></div>
-  <a href="#s6">6 · 五大主流程</a>
+  <a href="#s6">6 · 五大业务流程</a>
   <a href="#s7">7 · 案例：到货少了 2kg</a>
   <a href="#s8">8 · 工作边界与决策清单</a>
   <a href="#s9">9 · 建立体感的方法</a>
@@ -143,10 +127,10 @@
 <div class="hero">
   <span class="kicker">滇界云管 V4 · 新人上手教程</span>
   <h1>产品经理速成手册</h1>
-  <p class="lead">不是让你背下几百条规则，而是建立判断力——看到一个需求，知道它动了哪块业务、会影响谁、什么能自己定、什么必须找业务方拍板。</p>
+  <p class="lead">不讲代码、不讲系统实现，只讲餐馆的生意是怎么运转的。目标是让你看到一个业务需求，就知道它动了哪块业务、会影响谁、什么能自己定、什么必须找业务方拍板。</p>
   <div class="meta">
     <div><b>四</b>大知识域</div>
-    <div><b>五</b>大主流程</div>
+    <div><b>五</b>大业务流程</div>
     <div><b>8</b>站真实案例</div>
     <div><b>5</b>道自测题</div>
   </div>
@@ -156,17 +140,17 @@
 <section id="s0">
   <h2 class="sec"><span class="num" style="background:#64748b">0</span>这本教程怎么用</h2>
   <p class="sec-sub">先搞清楚"懂"的标准，别用错力气。</p>
-  <div class="big-quote">目标不是记住全部规则，而是获得可靠判断力。这套系统有些业务口径至今未定，业务方自己也在讨论。</div>
+  <div class="big-quote">目标不是记住全部规则，而是获得可靠判断力。这家公司有些业务口径至今未定，业务方自己也在讨论。</div>
   <h3>「懂」分四层</h3>
   <table>
     <tr><th>层级</th><th>表现</th><th>达成方式</th><th>大致时间</th></tr>
     <tr><td><b>L1 能复述流程</b></td><td>知道收货后会派生账期、对账、凭证</td><td>读这本教程</td><td>3~5 天</td></tr>
-    <tr><td><b>L2 独立负责一块</b></td><td>能独立处理"日报导入"的需求</td><td>接一个小需求做一遍</td><td>2~3 周</td></tr>
-    <tr><td><b>L3 判断跨模块影响</b></td><td>要改报损金额算法，你立刻知道会连带影响应付、账期、凭证、对账四处</td><td>踩坑 + 复盘</td><td>1.5~2 个月</td></tr>
+    <tr><td><b>L2 独立负责一块</b></td><td>能独立处理"日报"这块业务的需求</td><td>接一个小需求做一遍</td><td>2~3 周</td></tr>
+    <tr><td><b>L3 判断跨环节影响</b></td><td>要改报损金额算法，你立刻知道会连带影响应付、账期、凭证、对账四处</td><td>踩坑 + 复盘</td><td>1.5~2 个月</td></tr>
     <tr><td><b>L4 拍板业务口径</b></td><td>能回答"什么情况该冻结账期""用哪种应付口径"</td><td>真实案例喂出来</td><td>2~3 个月</td></tr>
   </table>
-  <div class="tip"><b>体感 = L2 到 L3 之间</b>它是被问题逼出来的，不是被文档灌出来的。先跟一笔真实单据走完全流程（第 7 节），不要从功能列表开始背。</div>
-  <div class="note"><b>读代码的捷径</b>业务规则大量沉淀在代码里，文档反而滞后。先看 <code>schema.prisma</code> 的 <code>enum</code>（业务规则的硬化形态），再看 <code>domain/*</code> 的 <code>assert*Transition</code>（状态转移表）。</div>
+  <div class="tip"><b>体感 = L2 到 L3 之间</b>它是被问题逼出来的，不是被文档灌出来的。先跟一笔真实交易走完全流程（第 7 节），不要从功能列表开始背。</div>
+  <div class="note"><b>学习的捷径</b>遇到不清楚的业务规则，去问业务方，而不是从功能列表里猜。把每个"为什么这么算"记成一张口径清单，三个月后这就是别人没有的资产。</div>
 </section>
 
 <!-- 1 -->
@@ -175,24 +159,24 @@
   <p class="sec-sub">所有复杂机制，都是为了让两个数字算得准、对得上、能追溯。</p>
   <div class="big-quote">用食材换钱，赚的是差价；难的是食材会变质、数量不标准、而且一堆人参与其中。</div>
   <div class="grid cols-2">
-    <div class="card"><h3 style="margin-top:0">① 卖了多少？（营收）</h3><p>来自收银 / POS。每天打烊后产生营业额、菜品销量。</p></div>
+    <div class="card"><h3 style="margin-top:0">① 卖了多少？（营收）</h3><p>来自每天的营业。营业额、菜品销量，打烊后汇总出来。</p></div>
     <div class="card"><h3 style="margin-top:0">② 花了多少？（成本）</h3><p>主要是食材成本，占营业额的 <b>30~40%</b>。两者相减就是利润。</p></div>
   </div>
   <h3>三流并行——复杂度全在"缝"上</h3>
   <div class="diagram"><pre class="mermaid">
 flowchart LR
     A["物流<br/>食材 供应商→门店→菜品"] --> D["对账与核算"]
-    B["资金流<br/>欠钱→付钱→记凭证"] --> D
-    C["票据流<br/>订单/送货单/发票/凭证"] --> D
+    B["资金流<br/>欠钱→付钱→记账"] --> D
+    C["单据流<br/>订单/送货单/发票/凭证"] --> D
   </pre></div>
-  <p>货今天到，钱可能 30 天后付，发票可能更晚。<b>货和钱速度不同，全靠对账缝在一起</b>——这就是派生、对账、冻结机制的来源。</p>
+  <p>货今天到，钱可能 30 天后付，发票可能更晚。<b>货和钱速度不同，全靠对账缝在一起</b>——这就是派生、对账、冻结这些机制的来源。</p>
   <h3>角色地图</h3>
   <table>
-    <tr><th>角色</th><th>在餐馆里干什么</th><th>在系统里关心什么</th></tr>
-    <tr><td><b>厨师长 / 店长</b></td><td>看库存、下单、收货、报损、上传日报</td><td>预计库存够不够、货到得对不对</td></tr>
-    <tr><td><b>总厨</b></td><td>管菜品配方、处理缺料、仲裁报损争议</td><td>BOM 齐不齐、成本准不准</td></tr>
+    <tr><th>角色</th><th>在餐馆里干什么</th><th>最关心什么</th></tr>
+    <tr><td><b>厨师长 / 店长</b></td><td>看库存、下单、收货、报损、上报日报</td><td>库存够不够、货到得对不对</td></tr>
+    <tr><td><b>总厨</b></td><td>管菜品配方、处理缺料、仲裁报损争议</td><td>配方齐不齐、成本准不准</td></tr>
     <tr><td><b>供应商</b></td><td>接单、送货、开发票</td><td>订单改没改、什么时候付款</td></tr>
-    <tr><td><b>内部供应链</b></td><td>管总仓采购、配送、商品主数据</td><td>合同价、验收、月结</td></tr>
+    <tr><td><b>内部供应链</b></td><td>管总仓采购、配送、商品资料</td><td>合同价、验收、月结</td></tr>
     <tr><td><b>财务</b></td><td>对账、审发票、付款、记账</td><td>应付金额、账期、凭证</td></tr>
     <tr><td><b>老板</b></td><td>看报表、审批大额支出</td><td>门店利润、成本率</td></tr>
   </table>
@@ -201,22 +185,22 @@ flowchart LR
 <!-- 2 -->
 <section id="s2">
   <h2 class="sec"><span class="num" style="background:var(--food)">2</span>餐饮行业常识</h2>
-  <p class="sec-sub">BOM、日报、成本率——餐饮成本核算的三块基石。</p>
+  <p class="sec-sub">配方、日报、成本率——餐饮成本核算的三块基石。</p>
   <div class="grid cols-3">
-    <div class="concept food"><h4>菜品 & BOM</h4><p>菜品是售卖单元（宫保鸡丁 38 元）。BOM 是配方：鸡肉 300g、花生 50g、调料 15g。</p></div>
-    <div class="concept food"><h4>毛重 & 损耗率</h4><p>采购的鸡带骨，BOM 按毛重算，实际用量 ×(1+损耗率)。10% 损耗 → 300g 变 330g。</p></div>
+    <div class="concept food"><h4>菜品 & 配方（BOM）</h4><p>菜品是售卖单元（宫保鸡丁 38 元）。配方是这道菜需要什么料、各多少：鸡肉 300g、花生 50g、调料 15g。</p></div>
+    <div class="concept food"><h4>毛重 & 损耗率</h4><p>采购的鸡带骨，配方按毛重算，实际用量 ×(1+损耗率)。10% 损耗 → 300g 变 330g。</p></div>
     <div class="concept food"><h4>倒推消耗</h4><p>核心魔法：不用每天称原料，只要知道卖了几份菜，就能算出用了多少食材。</p></div>
   </div>
   <h3>日报——连接"卖"和"算消耗"的桥梁</h3>
-  <p>每天打烊后收银系统导出两张表：<b>综合营业统计</b>（营业额、优惠、净收入）+ <b>菜品销售明细</b>（每道菜卖了几份）。店长上传后系统做三件事：</p>
+  <p>每天打烊后整理两张表：<b>营业统计</b>（营业额、优惠、净收入）+ <b>菜品销售明细</b>（每道菜卖了几份）。店长上报后要做三件事：</p>
   <table>
     <tr><th>动作</th><th>说明</th></tr>
-    <tr><td>记营业收入</td><td>用<b>净收入</b>而非营业额（因为打折、退菜）</td></tr>
+    <tr><td>记营业收入</td><td>用<b>净收入</b>而非营业额（因为有打折、退菜）</td></tr>
     <tr><td>记菜品销量</td><td>每道菜卖了几份</td></tr>
-    <tr><td>按 BOM 扣库存</td><td>倒推食材消耗</td></tr>
+    <tr><td>按配方扣库存</td><td>倒推食材消耗</td></tr>
   </table>
-  <div class="warn"><b>餐饮铁律</b>退菜不补回库存（菜已做，料已用）；赠品按 BOM 扣减（它是正常销售行，显式收入为 0）；百家蘸料、纸巾标记为 <code>EXCLUDE</code> 不扣库存。</div>
-  <div class="note"><b>关于美团</b>真正的美团到店 SaaS 里，日报数据是 POS 通过 API 自动同步的。本系统用"手工上传双表"，是 POS 集成未打通时的临时替代——代码里有 <code>MEITUAN_ENABLED</code> 开关但生产没开。</div>
+  <div class="warn"><b>餐饮铁律</b>退菜不补回库存（菜已做，料已用）；赠品按配方扣减（它是正常销售，只是收入记为 0）；纸巾、蘸料这类明确标记为"不扣库存"的商品，不参与扣减。</div>
+  <div class="note"><b>关于数据来源</b>在已经打通收银系统的餐饮软件里，这份日报数据是自动同步的；这里仍需店长每天上报。但无论手工还是自动，业务规则是一样的：先有销量，再用配方倒推消耗。</div>
   <h3>食材成本率（Food Cost %）</h3>
   <div class="formula"><span class="hl">食材成本 ÷ 营业额</span>   →   餐饮最核心指标，健康区间 30~40%</div>
   <p>太高说明浪费/损耗/定价有问题，太低可能偷工减料。老板和财务报表里到处是这个指标。</p>
@@ -229,25 +213,25 @@ flowchart LR
   <h3>预计库存公式</h3>
   <div class="formula">预计库存 = <span class="hl">上次盘点基准</span>
          + 后续已确认收货
-         − BOM / 人工 / 日报消耗
+         − 做菜 / 人工 / 日报消耗
          − 店内报损</div>
-  <p>定期实物清点一次，重立可信基准（系统里叫 <code>InventorySnapshot</code>）。下次盘点重建基准，之前的误差一次性归零。页面和接口必须带"<b>预计</b>"二字。</p>
+  <p>定期做一次实物清点，重立可信基准。下次盘点重建基准，之前的误差一次性归零。所有页面和说明都必须带"<b>预计</b>"二字，不能说成实时库存。</p>
   <h3>三本账必须分开</h3>
   <div class="diagram"><pre class="mermaid">
 flowchart TD
     A["门店预计库存<br/>盘点基准 + 收货 − 消耗 − 报损"]
     B["供应商库存<br/>供应商自己的货，独立流水"]
-    C["总仓库存<br/>批次 / 库位 / 台账 / 预占"]
+    C["总仓库存<br/>批次 / 库位 / 台账 / 锁定"]
     A -.绝不能混算.-> B
     B -.绝不能混算.-> C
   </pre></div>
   <ul class="clean">
-    <li>门店消耗<b>绝不能改</b>供应商 <code>Product.stock</code>——这是两本账。</li>
-    <li>门店安全库存用 <code>StoreInventoryPolicy</code>，<b>不能复用</b> <code>Product.minStock</code>（那是供应商口径）。</li>
+    <li>门店的消耗<b>绝不能改动</b>供应商的库存数字——这是两本账。</li>
+    <li>门店的安全库存线和供应商的安全库存线是两回事，<b>不能混用</b>。</li>
   </ul>
   <div class="grid cols-2">
-    <div class="concept stock"><h4>单位换算</h4><p>采购按"箱"、库存按"kg"、下单整箱起订。单位没换算或状态 PENDING，相关行会被排除在库存滚动之外——否则会把"箱"当"kg"用。</p></div>
-    <div class="concept stock"><h4>移动加权平均成本</h4><p>不同批次进价不同，库存金额按加权平均算。每次收货都会刷新平均成本——这就是"收货后要重估消耗成本"的原因。</p></div>
+    <div class="concept stock"><h4>单位换算</h4><p>采购按"箱"、库存按"公斤"、下单要整箱起订。单位还没统一确认的商品，相关数量不参与库存计算——否则会把"箱"当"公斤"用。</p></div>
+    <div class="concept stock"><h4>移动加权平均成本</h4><p>不同批次进价不同，库存金额按加权平均算。每次收货都会刷新平均成本——这就是"收货后要重算消耗成本"的原因。</p></div>
   </div>
 </section>
 
@@ -257,35 +241,35 @@ flowchart TD
   <p class="sec-sub">餐饮供应链最特色的地方：三个量永远并列。</p>
   <div class="grid cols-3">
     <div class="card" style="text-align:center"><span class="pill">订购量</span><p style="margin:8px 0 0">订 50kg</p></div>
-    <div class="card" style="text-align:center"><span class="pill">实发量</span><p style="margin:8px 0 0">供应商发 48kg</p></div>
+    <div class="card" style="text-align:center"><span class="pill">发货量</span><p style="margin:8px 0 0">供应商发 48kg</p></div>
     <div class="card" style="text-align:center"><span class="pill">实收量</span><p style="margin:8px 0 0">门店收 48kg</p></div>
   </div>
-  <p>三者差额就是<b>到货差异</b>（短缺、破损、错发），要走报损/索赔。供应商发货前可调实发量，门店收货时再确认实收量。</p>
+  <p>三者差额就是<b>到货差异</b>（短缺、破损、错发），要走报损/索赔。供应商发货前可调发货量，门店收货时再确认实收量。</p>
   <h3>反直觉但正确的规则</h3>
   <table>
     <tr><th>规则</th><th>为什么</th></tr>
-    <tr><td>原始订单不可覆盖</td><td>订单是合同凭据。供应商可"申请改单"但<b>必须门店批准</b>，系统保留不可变快照防赖账</td></tr>
-    <tr><td>发货时调减不算报损</td><td>"应到量"以 <code>shippedQty</code> 为准。发货环节协商调减是正常履约</td></tr>
-    <tr><td>到货后少 2kg 才算报损</td><td>实收 &lt; 应到，才是真正的短缺</td></tr>
-    <tr><td>自动送达 ≠ 自动收货</td><td>24h 只解锁状态，收货必须门店人工确认，防止"货没到→自动收货→幽灵入账"</td></tr>
+    <tr><td>原始订单不可覆盖</td><td>订单是合同凭据。供应商可"申请改单"但<b>必须门店批准</b>，并保留原始单据，防止事后赖账</td></tr>
+    <tr><td>发货时调减不算报损</td><td>"应到量"以供应商确认的发货量为准。发货环节协商调减，是正常履约</td></tr>
+    <tr><td>到货后少 2kg 才算报损</td><td>实收小于应到，才是真正的短缺</td></tr>
+    <tr><td>送达不等于收货</td><td>送达只是推进到"待验收"，收货必须门店人工确认，防止"货没到就自动收货、凭空入账"</td></tr>
     <tr><td>首次发货即关闭履约</td><td>未发余量直接关闭并通知"不补送"；要更多货得重新下单</td></tr>
-    <tr><td>短量报损按 kind 分组</td><td>按"原因"分组会影响两位小数舍入边界，导致应付金额取决于操作员措辞</td></tr>
+    <tr><td>短量报损按类型分组</td><td>按"原因"分组会影响金额舍入边界，导致应付金额取决于操作员的措辞</td></tr>
   </table>
   <h3>到货差异的几种类型</h3>
   <p>
-    <span class="tag t-scm">短缺 ARRIVAL_SHORTAGE</span>
-    <span class="tag t-scm">破损 ARRIVAL_DAMAGE</span>
-    <span class="tag t-scm">错发 WRONG_ITEM</span>
-    <span class="tag t-scm">店内报损 INTERNAL_WASTE</span>
+    <span class="tag t-scm">短缺</span>
+    <span class="tag t-scm">破损</span>
+    <span class="tag t-scm">错发</span>
+    <span class="tag t-scm">店内报损</span>
   </p>
-  <p>供应商可接受、拒绝；拒绝后由<b>总厨仲裁</b>。逾期 24h 不处理会自动同意（但<b>逾期补报必须人工审批</b>）。</p>
+  <p>供应商可接受、拒绝；拒绝后由<b>总厨仲裁</b>。超过 24 小时不处理会自动同意（但<b>逾期补报必须人工审批</b>）。</p>
   <h3>供应商直送门店 vs 总仓采购</h3>
   <table>
-    <tr><th>模式</th><th>说明</th><th>财务后果</th></tr>
+    <tr><th>模式</th><th>说明</th><th>后果</th></tr>
     <tr><td><b>供应商直送门店</b></td><td>货物直接到店，当前主要模式</td><td>产生应付、账期、发票</td></tr>
-    <tr><td><b>总仓采购</b>（HEADQ_WAREHOUSE）</td><td>总仓向外部供应商采购</td><td><b>不建外部应付凭证和账期</b>，只留收货记录</td></tr>
+    <tr><td><b>总仓采购</b></td><td>总仓向外部供应商采购</td><td><b>不产生对外部供应商的应付和账期</b>，只留收货记录</td></tr>
   </table>
-  <div class="warn"><b>PM 注意</b>看到"总仓收货没生成账期"不要以为是 bug，是设计如此。</div>
+  <div class="warn"><b>PM 注意</b>看到"总仓收货没生成账期"不要以为是问题，是业务设计如此。</div>
 </section>
 
 <!-- 5 -->
@@ -293,14 +277,14 @@ flowchart TD
   <h2 class="sec"><span class="num" style="background:var(--fin)">5</span>财务常识</h2>
   <p class="sec-sub">从收货到付款的完整链条，以及最容易出错的两种应付口径。</p>
   <h3>完整链条</h3>
-  <div class="formula">收货 → 账期 → 对账 → 发票 → 付款 → 资金流水 → 凭证</div>
+  <div class="formula">收货 → 账期 → 对账 → 发票 → 付款 → 资金流水 → 记账凭证</div>
   <table>
     <tr><th>概念</th><th>大白话</th></tr>
     <tr><td>账期</td><td>供应商赊账，比如"到货后 30 天付款"</td></tr>
     <tr><td>应付账款</td><td>欠供应商的钱，收货时就产生了</td></tr>
     <tr><td>对账</td><td>月底核对"我到底该付你多少"</td></tr>
     <tr><td>发票</td><td>供应商开的税务凭证，财务审核通过才能付款</td></tr>
-    <tr><td>凭证</td><td>会计分录，记"钱从哪来到哪去"</td></tr>
+    <tr><td>记账凭证</td><td>会计分录，记"钱从哪来到哪去"</td></tr>
   </table>
   <h3>复式记账（借 / 贷）</h3>
   <p>每笔钱都有借方和贷方，<b>两边相等</b>。收货时：</p>
@@ -317,20 +301,20 @@ flowchart TD
   </div>
   <h3>两种应付口径——最容易出错的地方</h3>
   <table>
-    <tr><th></th><th>NET_AT_RECEIPT（验收净额）</th><th>GROSS_PENDING_CLAIM（全额待索赔）</th></tr>
+    <tr><th></th><th>验收净额口径</th><th>全额待索赔口径</th></tr>
     <tr><td><b>收货时应付</b></td><td>按实收金额（1,056）</td><td>按订购全额挂账（1,100）</td></tr>
     <tr><td><b>差异确认后</b></td><td><b>不重复扣</b>，只解冻账期</td><td><b>扣差额 44 元</b> → 1,056</td></tr>
     <tr><td><b>场景</b></td><td>验收时就有差异</td><td>验收后事后补报</td></tr>
   </table>
   <div class="tip"><b>结果相同，时机不同</b>两种最终都付 1,056，但记账时机不同。选错口径就会重复扣钱或多付钱。</div>
-  <h3>账期冻结（ON_HOLD）</h3>
-  <p>任何未结案的到货差异，都会把账期置为 <code>ON_HOLD</code>——<b>争议没结案，先别付钱</b>。差异解决后才解冻。金额 &gt; 2000 元需老板审批；招行 CMB 自动付款默认关闭。</p>
+  <h3>账期冻结</h3>
+  <p>任何未结案的到货差异，都会把账期<b>冻结</b>起来——争议没结案，先别付钱，差异解决后才解冻。金额较大的账期（例如 2000 元以上）需要老板审批；银行的自动付款默认关闭。</p>
   <h3>其他财务模块速览</h3>
   <table>
     <tr><th>模块</th><th>流程</th></tr>
     <tr><td>月度成本核对</td><td>门店 → 厨师长 → 供应商 → 财务，四方都确认才入账</td></tr>
     <tr><td>备用金</td><td>申请 → 审批 → 发放 → 报账 → 关账</td></tr>
-    <tr><td>工资</td><td>Excel 上传 → 审批 → 发放（自动记凭证）</td></tr>
+    <tr><td>工资</td><td>Excel 上传 → 审批 → 发放（自动记账凭证）</td></tr>
     <tr><td>资本支出</td><td>店长申请 → 老板批 → 财务付（新店筹建、大型装修）</td></tr>
     <tr><td>月结锁账</td><td>关账后凭证不能再改；重开必须填原因</td></tr>
   </table>
@@ -338,40 +322,40 @@ flowchart TD
 
 <!-- 6 -->
 <section id="s6">
-  <h2 class="sec"><span class="num" style="background:#0f766e">6</span>五大主流程（业务视角）</h2>
+  <h2 class="sec"><span class="num" style="background:#0f766e">6</span>五大业务流程</h2>
   <p class="sec-sub">把前面四块知识串成五条业务流。</p>
   <table>
-    <tr><th>流程</th><th>谁触发</th><th>核心状态链</th><th>关键产出</th></tr>
-    <tr><td><b>A 日报→BOM→库存</b></td><td>店长 / 总厨</td><td>预览→确认→完成</td><td>营业/销量/消耗、缺配方待办、预计库存</td></tr>
-    <tr><td><b>B 上游采购</b></td><td>供应链 / 供应商 / 财务</td><td>合同→订单→发货→验收复审→索赔→月结</td><td>总仓台账、差异单、结算单</td></tr>
+    <tr><th>流程</th><th>谁触发</th><th>核心环节</th><th>关键产出</th></tr>
+    <tr><td><b>A 日报→配方→库存</b></td><td>店长 / 总厨</td><td>上报→核对→确认→补配方</td><td>营业、销量、消耗、预计库存</td></tr>
+    <tr><td><b>B 总仓采购</b></td><td>供应链 / 供应商 / 财务</td><td>合同→下单→发货→验收→索赔→月结</td><td>库存台账、差异单、结算单</td></tr>
     <tr><td><b>C 财务闭环</b></td><td>财务 / 系统</td><td>账期→对账→发票→付款→凭证</td><td>账期、资金流水、凭证</td></tr>
-    <tr><td><b>D 库存域</b></td><td>供应链 / 店长</td><td>制单→审核→复审才过账</td><td>台账流水、盘点基准、调拨</td></tr>
-    <tr><td><b>E 门店履约</b></td><td>厨师长/店长/供应商/总厨</td><td>已提交→已接单→配送中→待验收→已收货→完成</td><td>配送单、收货单、报损、账期</td></tr>
+    <tr><td><b>D 库存管理</b></td><td>供应链 / 店长</td><td>制单→审核→复核后生效</td><td>库存流水、盘点基准、调拨</td></tr>
+    <tr><td><b>E 门店履约</b></td><td>厨师长/店长/供应商/总厨</td><td>下单→接单→发货→送达→收货→完成</td><td>配送单、收货单、报损、账期</td></tr>
   </table>
-  <h3>流程 A：日报 → BOM → 预计库存</h3>
+  <h3>流程 A：日报 → 配方 → 预计库存</h3>
   <div class="diagram"><pre class="mermaid">
 flowchart TD
-    A1["店长上传两份 XLSX<br/>综合营业统计 + 菜品销售明细"]
-    A2["解析校验：门店精确匹配、金额勾稽<br/>退菜只识别不补库存"]
-    A3["生成预览：菜名匹配 → 选 BOM 配方<br/>销量×用量×(1+损耗) → 单位换算"]
-    A4["店长确认：单事务原子写入<br/>营业收入 + 销量 + 消耗 + 缺配方待办"]
-    A5["总厨补配方 → 幂等回补历史消耗"]
+    A1["店长上报两张营业表<br/>营业统计 + 菜品销售明细"]
+    A2["核对：门店、日期、金额是否正确<br/>退菜只记录，不补库存"]
+    A3["生成预览：菜名对应菜品 → 找到配方<br/>销量×用量×(1+损耗) → 统一单位"]
+    A4["店长确认一次完成<br/>营业 + 销量 + 食材消耗 + 缺配方待办"]
+    A5["总厨补齐配方 → 自动补算历史消耗"]
     A6["预计库存滚动：盘点基准 + 收货 − 消耗 − 报损"]
     A1 --> A2 --> A3 --> A4 --> A5 --> A6
   </pre></div>
-  <div class="note"><b>PM 注意</b>确认前如果 BOM/配方变了，系统返回 <code>PREVIEW_REFRESHED</code> 要求重新核对——防止用旧规则算错账。缺配方不阻塞整份日报，可"暂缓并确认"转给总厨。</div>
-  <h3>流程 B：上游采购（总仓）</h3>
+  <div class="note"><b>PM 注意</b>确认前如果配方变了，系统会提示重新核对——用旧配方算出来的消耗是错的。缺配方不阻塞整份日报，可以先确认、再交给总厨补。</div>
+  <h3>流程 B：总仓采购</h3>
   <div class="diagram"><pre class="mermaid">
 flowchart TD
     B1["合同：单价·税率·账期·起订量"]
-    B2["采购订单：草稿→待审批→已提交→接受"]
-    B3["发货：实发量确认"]
-    B4["到货验收：多图质检"]
-    B5{"高于标准价?"}
+    B2["采购订单：拟单→审批→提交→供应商接受"]
+    B3["发货：确认实发量"]
+    B4["到货验收：拍照质检"]
+    B5{"实际单价高于标准价?"}
     B6["禁止入库"]
-    B7{"命中复审阈值?"}
-    B8["待复审 → 不同人复核"]
-    B9["过账：台账流水 + 自动生成差异单"]
+    B7{"金额超阈值 / 超量 / 临时价?"}
+    B8["换人复核后才能生效"]
+    B9["正式入账：库存流水 + 自动生成差异单"]
     B10["月结：对账→确认→财务锁定→开票→付款"]
     B1 --> B2 --> B3 --> B4 --> B5
     B5 -->|是| B6
@@ -380,21 +364,21 @@ flowchart TD
     B7 -->|否| B9
     B9 --> B10
   </pre></div>
-  <div class="warn"><b>两条硬规则</b>实际单价 &gt; 标准价 → 直接禁止验收入库；金额超阈值/超量收货/临时价/敏感品类 → 必须<b>不同人复审</b>才生效。改单硬边界：任一行已发货或已收货，禁止改单。</div>
-  <h3>流程 D & C 要点</h3>
+  <div class="warn"><b>两条硬规则</b>实际单价高于标准价，直接禁止验收入库；金额超阈值、超量收货、临时价、敏感品类，必须<b>换人复核</b>才生效。只要货已发出或已收到，就不能改单。</div>
+  <h3>流程 C、D 要点</h3>
   <div class="grid cols-2">
-    <div class="concept stock"><h4>D · 复审才生效</h4><p>制单和审核都不动库存，只有「复审」才真正过账。盘点、调拨也一样——审核后还要复审，防止错误单据直接改账。</p></div>
-    <div class="concept fin"><h4>C · 防重付</h4><p>账期自动付款与发票付款两条路径互斥，不能重复付。凭证在事务外补建，失败只留警告不回滚付款。</p></div>
+    <div class="concept stock"><h4>D · 复核后才生效</h4><p>单据在创建和审核阶段都不动库存，只有复核通过后才正式生效。盘点、调拨也一样——防止错误单据直接改账。</p></div>
+    <div class="concept fin"><h4>C · 防重复付款</h4><p>账期自动付款与发票付款两条路径互斥，不能重复付。记账凭证是后补的，即使补记失败也不影响付款本身。</p></div>
   </div>
   <h3>流程 E：门店履约</h3>
   <div class="diagram"><pre class="mermaid">
 flowchart TD
-    E1["厨师长下单 50kg<br/>写入不可变快照"]
-    E2["供应商接单<br/>预占库存"]
-    E3["供应商发货 50kg<br/>关闭未发余量（不补送）"]
-    E4["送达<br/>24h 自动送达但≠自动收货"]
-    E5["门店收货：实收 48kg<br/>原子生成收货单 + 报损 2kg"]
-    E6["派生：凭证/账期(冻结)/对账"]
+    E1["厨师长下单 50kg"]
+    E2["供应商接单，锁定库存"]
+    E3["供应商发货 50kg，未发部分不再补送"]
+    E4["送达：只推进到待验收，还要等人收货"]
+    E5["门店收货：实收 48kg，少 2kg"]
+    E6["自动生成：收货单 + 报损单 + 冻结账期 + 对账单"]
     E7["差异确认 → 解冻账期 → 订单完成"]
     E1 --> E2 --> E3 --> E4 --> E5 --> E6 --> E7
   </pre></div>
@@ -411,25 +395,25 @@ flowchart TD
     <div class="card" style="text-align:center"><b>账期</b><p style="margin:4px 0 0">到货后 30 天</p></div>
   </div>
   <div class="timeline">
-    <div class="step"><span class="st">1 · 下单</span><h4>厨师长订 50kg</h4><p>写入不可变快照，从这一刻起"订了 50kg"钉死。</p><div class="kv">状态：<b>SUBMITTED</b> + 快照哈希</div></div>
-    <div class="step"><span class="st">2 · 接单</span><h4>供应商承诺供货</h4><p>动的是<b>供应商库存账</b>（预占 50kg），不是门店账。</p><div class="kv">状态：<b>CONFIRMED</b> + 预占</div></div>
-    <div class="step"><span class="st">3 · 发货</span><h4>供应商发 50kg</h4><p>发货时调减不算报损；首次发货即关闭履约，未发余量不补送。</p><div class="kv">状态：<b>DELIVERING</b></div></div>
-    <div class="step"><span class="st">4 · 送达</span><h4>货到了</h4><p><b>只解锁，不自动收货</b>——收货事实必须门店人工确认。</p><div class="kv">状态：<b>PENDING_CONFIRM</b></div></div>
-    <div class="step"><span class="st">5 · 收货</span><h4>实收 48kg，少 2kg</h4><p>应付按<b>实收</b>算：48 × 22 = <b>1,056 元</b>。原子生成收货单 + 报损单。</p><div class="kv"><b>Receipt CONFIRMED</b> + 报损 2kg</div></div>
-    <div class="step"><span class="st">6 · 派生</span><h4>收货后自动生成</h4><p>凭证（借库存/贷应付 1,056）+ 账期 <b>ON_HOLD</b> + 对账单。争议没结案，先别付钱。</p></div>
-    <div class="step"><span class="st">7 · 差异</span><h4>供应商确认少 2kg</h4><p><code>NET_AT_RECEIPT</code> 不重复扣款，只解冻账期。订单 <b>COMPLETED</b>。</p><div class="kv">报损 <b>APPROVED</b> + 解冻</div></div>
-    <div class="step"><span class="st">8 · 付款</span><h4>30 天后财务付款</h4><p>对账 → 审发票 → 付款 → 资金流水 → 凭证。防重付互斥，CMB 默认关闭。</p></div>
+    <div class="step"><span class="st">1 · 下单</span><h4>厨师长订 50kg</h4><p>原始单据被记录下来，从这一刻起"订了 50kg"就钉死了。</p><div class="kv">状态：<b>已提交</b></div></div>
+    <div class="step"><span class="st">2 · 接单</span><h4>供应商承诺供货</h4><p>锁定的是<b>供应商自己的库存</b>，不是门店库存。</p><div class="kv">状态：<b>已接单</b> + 锁定库存</div></div>
+    <div class="step"><span class="st">3 · 发货</span><h4>供应商发 50kg</h4><p>发货时调减不算报损；首次发货即关闭履约，未发余量不补送。</p><div class="kv">状态：<b>配送中</b></div></div>
+    <div class="step"><span class="st">4 · 送达</span><h4>货到了</h4><p><b>只推进到待验收，不代表已收货</b>——收货必须门店人工确认。</p><div class="kv">状态：<b>待验收</b></div></div>
+    <div class="step"><span class="st">5 · 收货</span><h4>实收 48kg，少 2kg</h4><p>应付按<b>实收</b>算：48 × 22 = <b>1,056 元</b>。同时生成收货单和报损单。</p><div class="kv"><b>收货单已确认</b> + 报损 2kg</div></div>
+    <div class="step"><span class="st">6 · 派生</span><h4>收货后自动生成</h4><p>记账凭证（借库存/贷应付 1,056）+ <b>冻结账期</b> + 对账单。争议没结案，先别付钱。</p></div>
+    <div class="step"><span class="st">7 · 差异</span><h4>供应商确认少 2kg</h4><p>按<b>验收净额口径</b>，不重复扣款，只解冻账期。订单完成。</p><div class="kv">报损<b>确认</b> + 解冻账期</div></div>
+    <div class="step"><span class="st">8 · 付款</span><h4>30 天后财务付款</h4><p>对账 → 审发票 → 付款 → 记资金流水 → 记账凭证。两条付款路径互斥，银行自动付款默认关闭。</p></div>
   </div>
   <h3>这个案例教会你什么</h3>
   <table>
     <tr><th>机制</th><th>防的风险</th></tr>
-    <tr><td>不可变快照 + 哈希</td><td>事后赖账</td></tr>
-    <tr><td>预占 / 转交 / 核销</td><td>超卖、重复占用</td></tr>
+    <tr><td>保留原始单据 + 改单需批准</td><td>事后赖账、单方面改合同</td></tr>
+    <tr><td>锁定 / 移交 / 核销库存</td><td>超卖、重复占用</td></tr>
     <tr><td>三量并列</td><td>生鲜短交扯皮</td></tr>
-    <tr><td>原子收货 + 唯一约束</td><td>重复收货、幽灵入账</td></tr>
-    <tr><td>账期冻结</td><td>争议未结就付错钱</td></tr>
+    <tr><td>人工收货 + 唯一收货单</td><td>重复收货、凭空入账</td></tr>
+    <tr><td>冻结账期</td><td>争议未结就付错钱</td></tr>
     <tr><td>两种应付口径</td><td>重复扣款 / 少扣款</td></tr>
-    <tr><td>凭证 + 复式记账</td><td>账实不符</td></tr>
+    <tr><td>记账凭证 + 复式记账</td><td>账实不符</td></tr>
   </table>
   <div class="big-quote">系统不是在"记录数据"，而是在替餐馆和供应商，把每一笔可能扯皮的交易，变成所有人都认账、出问题能倒查的原始凭证。</div>
 </section>
@@ -438,10 +422,10 @@ flowchart TD
 <section id="s8">
   <h2 class="sec"><span class="num" style="background:#b45309">8</span>产品经理的工作边界与决策清单</h2>
   <p class="sec-sub">PM 最大的价值不是画图，而是把业务口径问清楚、写明白。</p>
-  <h3>遇到需求先问：系统机制 or 业务口径？</h3>
+  <h3>遇到需求先问：业务规则 or 操作体验？</h3>
   <table>
     <tr><th>类型</th><th>谁拍板</th><th>例子</th></tr>
-    <tr><td><b>系统机制</b></td><td>PM 可以定，看技术/体验</td><td>页面加搜索、列表分页、按钮文案</td></tr>
+    <tr><td><b>操作体验</b></td><td>PM 可以定，看效率和易用性</td><td>页面加搜索、列表分页、按钮文案</td></tr>
     <tr><td><b>业务口径</b></td><td><b>必须找业务方拍板</b></td><td>应付按实收还是全额、什么情况冻结账期、税率口径</td></tr>
   </table>
   <div class="danger"><b>口径红线（不能碰）</b>
@@ -449,27 +433,19 @@ flowchart TD
       <li>税率与含税计算必须保留，不得删除或改口径</li>
       <li>原始订货单的订购量、单价不可无痕覆盖</li>
       <li>供应商库存与门店库存分账，不能混算</li>
-      <li>门店库存必须显示"预计"二字，不冒充实时实物库存</li>
-      <li>退菜不补库存；EXCLUDE 菜品不扣库存</li>
-      <li>总仓来源收货不建外部应付</li>
+      <li>门店库存必须显示"预计"二字，不冒充实时库存</li>
+      <li>退菜不补库存；标记为不扣库存的商品不参与扣减</li>
+      <li>总仓来源收货不产生对外部供应商的应付</li>
     </ul>
   </div>
   <h3>尚待业务确认的事项（别自作主张）</h3>
   <table>
     <tr><th>事项</th><th>当前临时规则</th><th>PM 能做什么</th></tr>
-    <tr><td>已确认入库更正</td><td>尚未定稿</td><td>不覆盖原记录，先做方案和测试</td></tr>
-    <tr><td>补送与报损关系</td><td>补送要计成本和库存，不设免费补送</td><td>等业务确认状态机后再实现</td></tr>
-    <tr><td>负库存</td><td>默认不应静默允许</td><td>先告警/阻止</td></tr>
+    <tr><td>已确认入库更正</td><td>尚未定稿</td><td>不覆盖原记录，先明确规则</td></tr>
+    <tr><td>补送与报损关系</td><td>补送要计成本和库存，不设免费补送</td><td>等业务确认规则后再考虑</td></tr>
+    <tr><td>负库存</td><td>默认不应静默允许</td><td>先告警、阻止</td></tr>
     <tr><td>月度全量盘点</td><td>暂缓</td><td>不作为前置阻塞</td></tr>
     <tr><td>菜品替代料优先级</td><td>鲜鸡/冻品可替代，其他逐项确认</td><td>禁止模糊匹配批量替代</td></tr>
-  </table>
-  <h3>文档与代码不一致（以代码为准）</h3>
-  <table>
-    <tr><th>说法</th><th>实际</th></tr>
-    <tr><td>"一订货单可多次配送"</td><td>首次有效发货即关闭履约，拒绝第二张配送单</td></tr>
-    <tr><td><code>DELIVERY_CREATED</code> 事件</td><td>枚举存在但当前未写入，仅预留</td></tr>
-    <tr><td>日报回补靠 <code>consumptionCorrection</code></td><td>那是单条错误扣减的冲销审计；回补在 <code>/bom-tasks/:id/backfill</code></td></tr>
-    <tr><td>两个 <code>Receipt</code></td><td>总仓 <code>UpstreamReceipt</code> 与门店 <code>Receipt</code> 是两套，账期挂门店这套</td></tr>
   </table>
 </section>
 
@@ -480,65 +456,65 @@ flowchart TD
   <h3>6~8 周上手路径</h3>
   <table>
     <tr><th>阶段</th><th>做什么</th><th>时间</th></tr>
-    <tr><td>第 1 周</td><td>跟一笔真实订单走完全流程（第 7 节），自己画一遍时序图</td><td>3~5 天</td></tr>
-    <tr><td>第 2 周</td><td><b>不看文档</b>，凭记忆默画五大流程状态机，画不出来的就是盲区</td><td>3~5 天</td></tr>
-    <tr><td>第 3~4 周</td><td>接一个真实小需求，从写 PRD 到看它上线</td><td>2 周</td></tr>
-    <tr><td>第 2 个月</td><td>接一个跨模块需求，体会"改这里会炸那里"，开始记口径清单</td><td>4 周</td></tr>
-    <tr><td>第 3 个月</td><td>主持一次业务口径讨论，能分辨技术问题 vs 业务决策</td><td>—</td></tr>
+    <tr><td>第 1 周</td><td>跟一笔真实订单走完全流程（第 7 节），自己画一遍过程图</td><td>3~5 天</td></tr>
+    <tr><td>第 2 周</td><td><b>不看文档</b>，凭记忆默画五大业务流程，画不出来的就是盲区</td><td>3~5 天</td></tr>
+    <tr><td>第 3~4 周</td><td>接一个真实小需求，从理清业务到看它落地</td><td>2 周</td></tr>
+    <tr><td>第 2 个月</td><td>接一个跨环节需求，体会"改这里会炸那里"，开始记口径清单</td><td>4 周</td></tr>
+    <tr><td>第 3 个月</td><td>主持一次业务口径讨论，能分辨操作问题 vs 业务决策</td><td>—</td></tr>
   </table>
   <div class="quiz">
     <h3>自测 5 题（答得上来就有体感了）</h3>
-    <p><b>1.</b> 为什么 24h 自动送达后不自动收货？</p>
-    <details><summary>参考答案</summary><p>防止"货没到→自动送达→自动收货→幽灵入账"，收货事实必须门店人工确认。</p></details>
+    <p><b>1.</b> 为什么送达之后不自动收货？</p>
+    <details><summary>参考答案</summary><p>防止"货没到→自动送达→自动收货→凭空入账"，收货事实必须门店人工确认。</p></details>
     <p><b>2.</b> 报损确认后应付金额变不变？（要答出分两种口径）</p>
-    <details><summary>参考答案</summary><p><code>NET_AT_RECEIPT</code> 不变（只解冻账期）；<code>GROSS_PENDING_CLAIM</code> 要扣差额。</p></details>
+    <details><summary>参考答案</summary><p>验收净额口径不变（只解冻账期）；全额待索赔口径要扣差额。</p></details>
     <p><b>3.</b> 为什么供应商改单必须门店批准？</p>
-    <details><summary>参考答案</summary><p>订单是合同凭据，防止供应商单方面改账；原始数量/单价不可无痕覆盖。</p></details>
-    <p><b>4.</b> 一张收货单派生了什么？哪个派生失败<b>不会</b>让收货回滚？</p>
-    <details><summary>参考答案</summary><p>派生凭证、账期、对账单；凭证在事务外补建，失败只留警告，不回滚收货。</p></details>
+    <details><summary>参考答案</summary><p>订单是合同凭据，防止供应商单方面改账；原始数量和单价不可无痕覆盖。</p></details>
+    <p><b>4.</b> 一张收货单会带来什么？其中哪一项失败不影响收货本身？</p>
+    <details><summary>参考答案</summary><p>带来记账凭证、账期、对账单；凭证是后补的，补记失败只留提醒，不影响收货。</p></details>
     <p><b>5.</b> 税率字段能不能删？为什么？</p>
-    <details><summary>参考答案</summary><p>不能删——税率与含税计算是 1.3.1/1.3.2 已有口径，属合规红线，用户已明确决定必须保留。</p></details>
+    <details><summary>参考答案</summary><p>不能删——税率与含税计算是已有业务口径，属合规红线，用户已明确决定必须保留。</p></details>
   </div>
-  <div class="note"><b>读代码顺序</b>别从 6000 行 schema 开始。先看 <code>schema.prisma</code> 的 <code>enum</code>，再看 <code>domain/*</code> 的 <code>assert*Transition</code>，最后看 <code>routes/*</code>。配套 <code>docs/PRODUCT_FUNCTION_ARCHITECTURE.md</code> 有 15 张按真实代码绘制的流程图。</div>
+  <div class="note"><b>学习建议</b>不要从一堆功能列表开始背。先理解一笔完整交易从下单到付款是怎么走的，再去抠某个环节。遇到想不通的规则，问业务方，而不是从界面上猜。</div>
 </section>
 
 <!-- 10 -->
 <section id="s10">
   <h2 class="sec"><span class="num" style="background:#64748b">10</span>术语速查表</h2>
-  <p class="sec-sub">30 个术语的大白话解释。</p>
+  <p class="sec-sub">30 个业务术语的大白话解释。</p>
   <div class="grid cols-2">
     <table style="box-shadow:none">
       <tr><th>术语</th><th>大白话</th></tr>
-      <tr><td>BOM / 配方</td><td>一道菜需要哪些料、各多少</td></tr>
+      <tr><td>配方（BOM）</td><td>一道菜需要哪些料、各多少</td></tr>
       <tr><td>毛重 / 净重</td><td>带骨带皮 / 能吃的净料重量</td></tr>
       <tr><td>损耗率</td><td>加工过程的浪费比例</td></tr>
-      <tr><td>倒推消耗</td><td>从销量 × 配方反推用了多少食材</td></tr>
-      <tr><td>EXCLUDE</td><td>不扣库存（纸巾、蘸料等）</td></tr>
+      <tr><td>倒推消耗</td><td>从销量 × 配方反推出用了多少食材</td></tr>
+      <tr><td>不扣库存商品</td><td>纸巾、蘸料这类明确不参与扣减的商品</td></tr>
       <tr><td>预计库存</td><td>"盘点 + 流水"算出来的，不是称出来的</td></tr>
       <tr><td>盘点基准</td><td>实物清点后重立的可信起点</td></tr>
       <tr><td>安全库存</td><td>不能低于的量，低了就订货</td></tr>
       <tr><td>移动加权平均</td><td>不同进价的货混算成本的方法</td></tr>
-      <tr><td>实发量 / 实收量</td><td>供应商发出 / 门店实际收到的数量</td></tr>
+      <tr><td>发货量 / 实收量</td><td>供应商发出 / 门店实际收到的数量</td></tr>
       <tr><td>到货差异</td><td>送少了、坏了、发错了</td></tr>
       <tr><td>报损 / 索赔</td><td>差异的责任认定和金额处理</td></tr>
       <tr><td>账期</td><td>先拿货后付钱的天数</td></tr>
-      <tr><td>ON_HOLD</td><td>账期冻结，争议未结不付钱</td></tr>
+      <tr><td>账期冻结</td><td>争议未结，先不付钱</td></tr>
       <tr><td>应付账款</td><td>欠供应商的钱</td></tr>
     </table>
     <table style="box-shadow:none">
       <tr><th>术语</th><th>大白话</th></tr>
-      <tr><td>NET_AT_RECEIPT</td><td>应付按实收净额，差异不重复扣</td></tr>
-      <tr><td>GROSS_PENDING_CLAIM</td><td>应付按全额挂账，差异确认后才扣</td></tr>
+      <tr><td>验收净额口径</td><td>应付按实收净额，差异不重复扣</td></tr>
+      <tr><td>全额待索赔口径</td><td>应付按全额挂账，差异确认后才扣</td></tr>
       <tr><td>对账</td><td>月底核对"该付多少"</td></tr>
       <tr><td>发票</td><td>供应商开的税务凭证，审核通过才能付款</td></tr>
-      <tr><td>凭证 / 复式记账</td><td>会计分录，有借有贷、两边相等</td></tr>
+      <tr><td>记账凭证 / 复式记账</td><td>会计分录，有借有贷、两边相等</td></tr>
       <tr><td>含税 / 不含税</td><td>金额是否含增值税，口径不同结果不同</td></tr>
       <tr><td>食材成本率</td><td>食材成本 ÷ 营业额，核心指标 30~40%</td></tr>
       <tr><td>月结 / 锁账</td><td>一个月结束后封账，不再改</td></tr>
-      <tr><td>预审 / 复审</td><td>审核后再复核一遍才过账</td></tr>
-      <tr><td>预占</td><td>先锁定库存，防止超卖</td></tr>
-      <tr><td>转交</td><td>预占所有权转移给正式订单，不重复占用</td></tr>
-      <tr><td>月台 / 库位</td><td>总仓里货物存放的位置</td></tr>
+      <tr><td>审核 / 复核</td><td>审完再复核一遍才正式生效</td></tr>
+      <tr><td>锁定库存</td><td>先预留库存，防止超卖</td></tr>
+      <tr><td>移交锁定</td><td>把预留库存转给正式订单，不重复占用</td></tr>
+      <tr><td>库位</td><td>总仓里货物存放的位置</td></tr>
       <tr><td>批次</td><td>同一批进货的货，用于质检和成本追溯</td></tr>
       <tr><td>净成本</td><td>扣掉税和折扣后的真实成本</td></tr>
       <tr><td>四方核对</td><td>门店→厨师长→供应商→财务都确认</td></tr>
@@ -547,8 +523,8 @@ flowchart TD
 </section>
 
 <footer>
-  <p>滇界云管 V4 · 产品经理速成教程 ｜ 配套文档：<code>docs/PRODUCT_MANAGER_HANDBOOK.md</code>（Markdown 版）、<code>docs/PRODUCT_FUNCTION_ARCHITECTURE.md</code>（15 张代码级流程图）</p>
-  <p>本教程内容基于当前工作区代码（HEAD d75290c）的状态机与业务规则整理，业务口径以代码和业务方确认为准。</p>
+  <p>滇界云管 V4 · 产品经理速成教程（纯业务版）｜ 只讲业务，不涉及系统实现细节。</p>
+  <p>本教程内容基于当前业务口径整理，业务规则以业务方最终确认结果为准。</p>
 </footer>
 </main>
 </div>
@@ -560,7 +536,6 @@ flowchart TD
     lineColor:'#94a3b8', secondaryColor:'#ecfdf5', tertiaryColor:'#fff'
   }, flowchart:{curve:'basis', useMaxWidth:true}});
 
-  // scroll progress
   const bar=document.getElementById('progress'), top=document.getElementById('top');
   function onScroll(){
     const h=document.documentElement;
@@ -571,7 +546,6 @@ flowchart TD
   window.addEventListener('scroll', onScroll, {passive:true}); onScroll();
   top.onclick=()=>window.scrollTo({top:0,behavior:'smooth'});
 
-  // scroll spy
   const links=[...document.querySelectorAll('nav a')];
   const sections=links.map(a=>document.querySelector(a.getAttribute('href'))).filter(Boolean);
   const obs=new IntersectionObserver(entries=>{

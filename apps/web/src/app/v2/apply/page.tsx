@@ -16,6 +16,7 @@ const ROLE_OPTIONS = [
   { value: 'CHEF_DIRECTOR',   label: '总厨' },
   { value: 'FINANCE',         label: '财务' },
   { value: 'ENGINEERING',     label: '工程部' },
+  { value: 'SUPPLY_CHAIN',    label: '内部供应链' },
   { value: 'SUPPLIER_OWNER',  label: '供应商 - 注册新公司 (我是公司负责人)' },
   { value: 'SUPPLIER_STAFF',  label: '供应商 - 加入已有公司' },
 ]

@@ -9,7 +9,7 @@ const auth = (app: any) => ({ preHandler: [app.authenticate] })
 // 注意: PURCHASER 是 v2 legacy 别名, 实际等同于 MANAGER (店长权限).
 // 已从申请白名单移除, 防止供应商误申请→拿店长权限的安全漏洞.
 const APPLICABLE_ROLES = [
-  'MANAGER', 'KITCHEN_LEAD', 'CHEF_DIRECTOR', 'FINANCE', 'ENGINEERING',
+  'MANAGER', 'KITCHEN_LEAD', 'CHEF_DIRECTOR', 'FINANCE', 'ENGINEERING', 'SUPPLY_CHAIN',
   'REGIONAL_MANAGER', // 区域经理（指派门店集合）
   'SUPPLIER_OWNER',  // 注册新供应商公司 → 自动创建 Supplier 实体
   'SUPPLIER_STAFF',  // 加入已有供应商 → 绑定到指定 Supplier
@@ -26,6 +26,7 @@ const ROLE_LABELS: Record<string, string> = {
   CHEF_DIRECTOR: '总厨',
   FINANCE: '财务',
   ENGINEERING: '工程部',
+  SUPPLY_CHAIN: '内部供应链',
   REGIONAL_MANAGER: '区域经理',
   SUPPLIER_OWNER: '供应商负责人',
   SUPPLIER_STAFF: '供应商员工',

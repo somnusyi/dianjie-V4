@@ -36,4 +36,16 @@ describe('account application environment',()=>{
   expect(fetcher).toHaveBeenCalledWith('/api/auth/supplier-list?tenantSlug=local-preview')
   expect(container.textContent).toContain('山禾食材')
  })
+ it('shows internal supply chain and submits that role without a store',async()=>{
+  const fetcher=await render()
+  const role=container.querySelector('select')!
+  expect(Array.from(role.options).some(option=>option.value==='SUPPLY_CHAIN'&&option.textContent==='内部供应链')).toBe(true)
+  change(role,'SUPPLY_CHAIN')
+  const inputs=container.querySelectorAll('input:not([type=search])')
+  change(inputs[0],'供应链申请人');change(inputs[1],'19900000142');change(inputs[2],'LocalOnly123');change(inputs[3],'LocalOnly123')
+  await act(async()=>Simulate.submit(container.querySelector('form')!))
+  const call=fetcher.mock.calls.find(([url])=>url==='/api/auth/apply')!
+  expect(JSON.parse(String(call[1]!.body))).toMatchObject({requestedRole:'SUPPLY_CHAIN'})
+  expect(JSON.parse(String(call[1]!.body))).not.toHaveProperty('requestedStoreId')
+ })
 })

@@ -112,6 +112,7 @@ type Movement = {
   product: { id: string; code: string; name: string }
   reversed?: boolean
   canReverse?: boolean
+  reverseBlockedReason?: string | null
 }
 
 type LedgerAudit = {
@@ -1037,10 +1038,10 @@ export default function InternalSupplyChainInventoryPage() {
             <Chip tone={data?.summary.inventoryMode === 'STRICT' ? 'green' : 'amber'}>
               {data?.summary.inventoryMode === 'STRICT' ? '正式库存' : data?.summary.inventoryMode === 'SHADOW' ? '影子账观察期' : '库存投影未启用'}
             </Chip>
-            
+
           </div>
           <h1 className="text-h1">总仓库存</h1>
-          
+
         </div>
         <div className="flex flex-wrap items-end gap-2">
           <label className="flex flex-col gap-1">
@@ -1117,8 +1118,8 @@ export default function InternalSupplyChainInventoryPage() {
             </div>
           </div>
           <div className="max-h-[680px] overflow-auto">
-            {scope === 'stock' ? <ResponsiveDataTable><table className="w-full min-w-[1180px] text-left text-caption">
-              <thead className="sticky top-0 bg-bg text-gray3"><tr><th className="px-4 py-3">商品</th><th className="px-4 py-3">采购规格</th><th className="px-4 py-3">库存单位</th><th className="px-4 py-3">换算关系</th><th className="px-4 py-3 text-right">物理</th><th className="px-4 py-3 text-right">预占</th><th className="px-4 py-3 text-right">可用</th><th className="px-4 py-3 text-right">金额</th><th className="px-4 py-3">状态</th></tr></thead>
+            {scope === 'stock' ? <ResponsiveDataTable><table className="w-full min-w-[1320px] text-left text-caption">
+              <thead className="sticky top-0 bg-bg text-gray3"><tr><th className="px-4 py-3">商品</th><th className="px-4 py-3">采购规格</th><th className="px-4 py-3">库存单位</th><th className="px-4 py-3">换算关系</th><th className="px-4 py-3 text-right">库存量</th><th className="px-4 py-3 text-right">预计出库量</th><th className="px-4 py-3 text-right">可用库存</th><th className="px-4 py-3 text-right">单位成本</th><th className="px-4 py-3 text-right">库存金额</th><th className="px-4 py-3">状态</th></tr></thead>
               <tbody className="divide-y divide-border">
                 {visible.map(item => <tr key={item.id}>
                   <td className="px-4 py-3"><b>{item.name}</b><div className="text-micro text-gray3">{item.code} · {item.category || '未分类'} · {item.spec || '—'}</div></td>
@@ -1128,7 +1129,8 @@ export default function InternalSupplyChainInventoryPage() {
                   <td className="px-4 py-3 text-right font-num">{qty(item.physicalQty)} {item.inventoryUnit}</td>
                   <td className="px-4 py-3 text-right font-num text-gray2">{qty(item.reservedQty)}</td>
                   <td className="px-4 py-3 text-right font-num">{qty(item.availableQty)}</td>
-                  <td className="px-4 py-3 text-right"><b>{money(item.inventoryValue)}</b><div className="text-micro text-gray3">均价 {money(item.averageUnitCost)}/{item.inventoryUnit}</div></td>
+                  <td className="px-4 py-3 text-right font-num">{money(item.averageUnitCost)}/{item.inventoryUnit}</td>
+                  <td className="px-4 py-3 text-right"><b>{money(item.inventoryValue)}</b></td>
                   <td className="px-4 py-3"><Chip tone={item.statusFlag === 'SHADOW_GAP' || item.statusFlag === 'OUT' ? 'red' : item.statusFlag === 'LOW' ? 'orange' : 'green'}>{item.statusFlag === 'SHADOW_GAP' ? '待实盘缺口' : item.statusFlag === 'OUT' ? '缺货' : item.statusFlag === 'LOW' ? '偏低' : '正常'}</Chip></td>
                 </tr>)}
               </tbody>
@@ -1160,7 +1162,7 @@ export default function InternalSupplyChainInventoryPage() {
           <ul className="max-h-[680px] divide-y divide-border overflow-auto">
             {movements.map(movement => <li key={movement.id} className="px-4 py-3">
               <div className="flex items-center gap-2"><b className="min-w-0 flex-1 truncate text-body">{movement.product.name}</b><span className={`font-num text-button ${movement.physicalDelta > 0 ? 'text-green-fg' : movement.physicalDelta < 0 ? 'text-red-fg' : 'text-gray2'}`}>{movement.physicalDelta > 0 ? '+' : ''}{qty(movement.physicalDelta)} {movement.inventoryUnit}</span></div>
-              <div className="mt-1 flex flex-wrap items-center gap-x-2 text-micro text-gray3"><span>{warehouseMovementLabel(movement.type, movement.sourceType)}</span>{movement.reservedDelta !== 0 && <span>预占 {movement.reservedDelta > 0 ? '+' : ''}{qty(movement.reservedDelta)}</span>}<span>余 {qty(movement.physicalAfter)}</span><span>{new Date(movement.effectiveAt).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'})}</span>{movement.type === 'MANUAL_INBOUND' && (movement.reversed ? <span className="text-red-fg">已冲销</span> : <button disabled={reversingInbound || movement.canReverse === false} title={movement.canReverse === false ? '入库单已审核或复审，请到入库单查看' : undefined} onClick={() => reverseInbound(movement)} className="text-accent underline disabled:opacity-40">冲销</button>)}</div>
+              <div className="mt-1 flex flex-wrap items-center gap-x-2 text-micro text-gray3"><span>{warehouseMovementLabel(movement.type, movement.sourceType)}</span>{movement.reservedDelta !== 0 && <span>预占 {movement.reservedDelta > 0 ? '+' : ''}{qty(movement.reservedDelta)}</span>}<span>余 {qty(movement.physicalAfter)}</span><span>{new Date(movement.effectiveAt).toLocaleString('zh-CN',{timeZone:'Asia/Shanghai'})}</span>{movement.type === 'MANUAL_INBOUND' && (movement.reversed ? <span className="text-red-fg">已冲销</span> : <button disabled={reversingInbound || movement.canReverse === false} title={movement.canReverse === false ? movement.reverseBlockedReason || '该入库流水不能单独冲销' : undefined} onClick={() => reverseInbound(movement)} className="text-accent underline disabled:opacity-40">冲销</button>)}</div>
               {(movement.note || movement.sourceName) && <p className="mt-1 text-micro text-gray2">{movement.sourceName ? `来源：${movement.sourceName}` : ''}{movement.sourceName && movement.note ? ' · ' : ''}{movement.note}</p>}
             </li>)}
             {!loading && movements.length === 0 && <li className="py-12 text-center text-caption text-gray3">影子账暂无流水</li>}

@@ -2,10 +2,12 @@
 
 import Link from 'next/link'
 import { useEffect, useMemo, useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import { Chip } from '@/components/v2'
 import { OrderCenterTabs } from '@/components/v2/order-center-tabs'
 import { apiFetch } from '@/lib/v2-auth'
-import { buildFulfillmentGroups, type FulfillmentGroup, type OperationGroup } from '@/lib/fulfillment-groups'
+import { fulfillmentFiltersFromSearch, type FulfillmentBucket, type FulfillmentOrderDayFilter } from '@/lib/fulfillment-filters'
+import { buildFulfillmentGroups, fulfillmentOrderDay, loadAllActionableFulfillmentOrders, type FulfillmentGroup, type OperationGroup } from '@/lib/fulfillment-groups'
 import { formatOrderStatusLabel, orderStatusTone } from '@/lib/supply-order-delivery-pc'
 
 type Order = {
@@ -27,7 +29,7 @@ type Order = {
   }>
 }
 
-type Bucket = 'ALL' | 'SUBMITTED' | 'CONFIRMED' | 'DELIVERING'
+type Bucket = FulfillmentBucket
 
 const BUCKETS: Array<{ value: Bucket; label: string }> = [
   { value: 'ALL', label: '全部待办' },
@@ -35,6 +37,16 @@ const BUCKETS: Array<{ value: Bucket; label: string }> = [
   { value: 'CONFIRMED', label: '待发货' },
   { value: 'DELIVERING', label: '待送达' },
 ]
+type OrderDay = FulfillmentOrderDayFilter
+const ORDER_DAYS: Array<{ value: OrderDay; label: string; hint: string }> = [
+  { value: 'ALL', label: '全部订货日', hint: '所有待办' },
+  { value: 'TODAY', label: '今日下单', hint: '今日待发货、待送达' },
+  { value: 'YESTERDAY', label: '昨日下单', hint: '昨日待发货、待送达' },
+]
+
+function isShipmentWork(order: Order) {
+  return order.status === 'CONFIRMED' || order.status === 'DELIVERING'
+}
 
 function actionLabel(status: string) {
   if (status === 'SUBMITTED') return '去接单'
@@ -84,7 +96,7 @@ function InternalOperationGroupCard({
                   <div className="flex flex-wrap items-center gap-2">
                     <Chip tone={orderStatusTone(order.status)}>{formatOrderStatusLabel(order.status)}</Chip>
                     <b className="font-num text-body">#{order.no}</b>
-                    <span className="text-micro text-gray3">{new Date(order.createdAt).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })}</span>
+                    <span className="text-micro text-gray3">下单 {new Date(order.submittedAt || order.createdAt).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })}</span>
                   </div>
                   <h2 className="mt-2 text-h2">{order.store?.name || '未知门店'}</h2>
                   <p className="mt-1 text-caption text-gray2">{itemSummary(order)}</p>
@@ -111,15 +123,23 @@ function InternalOperationGroupCard({
 }
 
 export default function InternalSupplyChainFulfillmentPage() {
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const initialFilters = fulfillmentFiltersFromSearch(searchParams)
+  const searchKey = searchParams.toString()
   const [orders, setOrders] = useState<Order[] | null>(null)
-  const [bucket, setBucket] = useState<Bucket>('ALL')
+  const [bucket, setBucket] = useState<Bucket>(initialFilters.bucket)
+  const [orderDay, setOrderDay] = useState<OrderDay>(initialFilters.orderDay)
   const [keyword, setKeyword] = useState('')
   const [error, setError] = useState('')
 
   function load() {
     setError('')
-    apiFetch<{ items: Order[] }>('/api/orders?page=1&pageSize=100')
-      .then(data => setOrders(data.items || []))
+    loadAllActionableFulfillmentOrders<Order>((status, page, pageSize) =>
+      apiFetch<{ items: Order[]; total: number; page: number; pageSize: number }>(
+        `/api/orders?status=${status}&page=${page}&pageSize=${pageSize}`,
+      ))
+      .then(setOrders)
       .catch(reason => {
         setOrders([])
         setError(String(reason?.message || reason))
@@ -127,6 +147,11 @@ export default function InternalSupplyChainFulfillmentPage() {
   }
 
   useEffect(() => { load() }, [])
+  useEffect(() => {
+    const filters = fulfillmentFiltersFromSearch(searchParams)
+    setBucket(filters.bucket)
+    setOrderDay(filters.orderDay)
+  }, [searchKey, searchParams])
 
   const actionable = useMemo(
     () => (orders || []).filter(order => ['SUBMITTED', 'CONFIRMED', 'DELIVERING'].includes(order.status)),
@@ -138,10 +163,22 @@ export default function InternalSupplyChainFulfillmentPage() {
     CONFIRMED: actionable.filter(order => order.status === 'CONFIRMED').length,
     DELIVERING: actionable.filter(order => order.status === 'DELIVERING').length,
   }), [actionable])
+  const dayCounts = useMemo(() => ({
+    ALL: actionable.length,
+    TODAY: actionable.filter(order => isShipmentWork(order) && fulfillmentOrderDay(order) === 'TODAY').length,
+    YESTERDAY: actionable.filter(order => isShipmentWork(order) && fulfillmentOrderDay(order) === 'YESTERDAY').length,
+  }), [actionable])
+  function replaceFilters(nextBucket: Bucket, nextOrderDay: OrderDay) {
+    const params = new URLSearchParams()
+    if (nextBucket !== 'ALL') params.set('bucket', nextBucket)
+    if (nextOrderDay !== 'ALL') params.set('orderDay', nextOrderDay)
+    router.replace(`/v2/supply-chain/fulfillment${params.size ? `?${params}` : ''}`)
+  }
   const visible = useMemo(() => {
     const term = keyword.trim().toLowerCase()
     return actionable.filter(order => {
       if (bucket !== 'ALL' && order.status !== bucket) return false
+      if (orderDay !== 'ALL' && (!isShipmentWork(order) || fulfillmentOrderDay(order) !== orderDay)) return false
       if (!term) return true
       return [
         order.no,
@@ -155,7 +192,7 @@ export default function InternalSupplyChainFulfillmentPage() {
         ]),
       ].some(value => String(value || '').toLowerCase().includes(term))
     })
-  }, [actionable, bucket, keyword])
+  }, [actionable, bucket, orderDay, keyword])
 
   // Only server metadata can change the list. Flatten local fallback groups so
   // older API responses keep the established one-order card workflow.
@@ -172,26 +209,37 @@ export default function InternalSupplyChainFulfillmentPage() {
       <header className="border-b border-border pb-5">
         <div className="mb-2 flex items-center gap-2">
           <Chip tone="green">内部可操作</Chip>
-          
+
         </div>
         <h1 className="text-h1">订单中心</h1>
-        
+
       </header>
 
       <OrderCenterTabs />
 
-      <section className="grid gap-3 py-4 sm:grid-cols-2 xl:grid-cols-4">
+      <section aria-label="按订货日查看" className="grid gap-3 pt-4 sm:grid-cols-3">
+        {ORDER_DAYS.map(item => <button
+          key={item.value}
+          type="button"
+          onClick={() => { setOrderDay(item.value); replaceFilters(bucket, item.value) }}
+          className={`rounded-card border p-4 text-left ${orderDay === item.value ? 'border-ink bg-ink text-white' : 'border-border bg-white'}`}
+        >
+          <div className="flex items-center justify-between"><b>{item.label}</b><span className="font-num text-h2">{dayCounts[item.value]}</span></div>
+          <div className={`mt-1 text-micro ${orderDay === item.value ? 'text-white/65' : 'text-gray3'}`}>{item.hint}</div>
+        </button>)}
+      </section>
+
+      <section aria-label="订单状态筛选" className="flex flex-wrap gap-2 py-4">
         {BUCKETS.map(item => (
           <button
             key={item.value}
             type="button"
-            onClick={() => setBucket(item.value)}
-            className={`rounded-card border p-4 text-left ${
-              bucket === item.value ? 'border-amber bg-amber/10' : 'border-border bg-white'
+            onClick={() => { setBucket(item.value); replaceFilters(item.value, orderDay) }}
+            className={`rounded-cta border px-3 py-1.5 text-button ${
+              bucket === item.value ? 'border-ink bg-ink text-white' : 'border-border bg-white text-gray2'
             }`}
           >
-            <div className="text-caption text-gray3">{item.label}</div>
-            <div className="mt-1 font-num text-h1">{counts[item.value]}</div>
+            {item.label} <span className="font-num">{counts[item.value]}</span>
           </button>
         ))}
       </section>
@@ -233,7 +281,7 @@ export default function InternalSupplyChainFulfillmentPage() {
                 <div className="flex flex-wrap items-center gap-2">
                   <Chip tone={orderStatusTone(order.status)}>{formatOrderStatusLabel(order.status)}</Chip>
                   <b className="font-num text-body">#{order.no}</b>
-                  <span className="text-micro text-gray3">{new Date(order.createdAt).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })}</span>
+                  <span className="text-micro text-gray3">下单 {new Date(order.submittedAt || order.createdAt).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })}</span>
                 </div>
                 <h2 className="mt-2 text-h2">{order.store?.name || '未知门店'}</h2>
                 <p className="mt-1 text-caption text-gray2">{itemSummary(order)}</p>

@@ -386,6 +386,10 @@ const orderListQuerySchema = z.object({
   keyword: z.string().trim().max(80).optional(),
   dateFrom: calendarDateSchema.optional(),
   dateTo: calendarDateSchema.optional(),
+  orderIds: z.string().trim().min(1).max(6500)
+    .transform(value => [...new Set(value.split(',').map(id => id.trim()).filter(Boolean))])
+    .pipe(z.array(z.string().min(1).max(64)).min(1).max(100))
+    .optional(),
   page: z.coerce.number().int().positive().max(100_000).default(1),
   pageSize: z.coerce.number().int().positive().max(100).default(20),
 }).refine(q => !q.dateFrom || !q.dateTo || q.dateFrom <= q.dateTo, {
@@ -473,6 +477,9 @@ function decorateOrderListItem(item: any) {
   const creationSource = typeof createdEvent?.metadata?.creationSource === 'string'
     ? createdEvent.metadata.creationSource
     : '历史记录'
+  const creationType = typeof createdEvent?.metadata?.creationType === 'string'
+    ? createdEvent.metadata.creationType
+    : '常规订货'
   const downstreamDocuments = Array.isArray(item.deliveries)
     ? item.deliveries.map((delivery: any) => ({
       id: delivery.id,
@@ -486,7 +493,7 @@ function decorateOrderListItem(item: any) {
   return {
     ...safeItem,
     creationSource,
-    creationType: '常规订货',
+    creationType,
     splitAt: acceptedEvents.at(-1)?.occurredAt || null,
     lastOperationAt: latestOrderOperationAt(item, events),
     printStatus: printEvents.length > 0 ? '已发起打印' : '未打印',
@@ -498,6 +505,7 @@ function decorateOrderListItem(item: any) {
 async function buildOrderListWhere(user: any, q: z.infer<typeof orderListQuerySchema>) {
   const { tenantId, role } = user
   const where: any = supplyDataReadScope(user)
+  if (q.orderIds) where.id = { in: q.orderIds }
   if (q.status) where.status = q.status
   if (q.storeId) {
     if (isStoreScoped(role)) resolveActiveStore(user, q.storeId)
@@ -779,6 +787,9 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         },
       },
     })
+    if (parsed.data.orderIds && rows.length !== parsed.data.orderIds.length) {
+      return reply.status(404).send({ error: '订货单不存在或无权访问' })
+    }
     if (exceedsOrderExportLimit(rows.length)) {
       return reply.status(422).send({ error: `导出结果超过 ${ORDER_EXPORT_MAX_ROWS} 条，请缩小筛选范围` })
     }

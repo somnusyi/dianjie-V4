@@ -8,7 +8,7 @@ vi.mock('@dianjie/db', async importOriginal => {
     const result = await work({
       $queryRaw: async () => [],
       warehouseDoc: {
-        findFirst: async () => ({ id: 'doc', status: 'CONFIRMED', reviewStatus: flag }),
+        findFirst: async () => ({ id: 'doc', type: 'MANUAL_INBOUND', status: 'CONFIRMED', reviewStatus: flag }),
         update: async ({ data }: any) => { flag = data.reviewStatus; return { id: 'doc', status: 'CONFIRMED', reviewStatus: flag } },
       },
       user: { findFirst: async () => ({ name: '供应链' }) },
@@ -25,8 +25,8 @@ it('review flag and log roll back together on log failure',async()=>{
  await expect(reviewWarehouseDoc({tenantId:'fixture',userId:'actor',docId:'doc'})).rejects.toThrow('injected log failure')
  expect(state.reviewStatus).toBe('UNREVIEWED');expect(state.committedLogs).toBe(0)
 })
-it('legacy cancellation calls are rejected without writing flags or logs',async()=>{
+it('cancellation reopens review and writes one log',async()=>{
  state.failLog=false
- await expect(unreviewWarehouseDoc({tenantId:'fixture',userId:'actor',docId:'doc'})).rejects.toMatchObject({statusCode:409})
- expect(state.reviewStatus).toBe('REVIEWED');expect(state.committedLogs).toBe(0)
+ expect((await unreviewWarehouseDoc({tenantId:'fixture',userId:'actor',docId:'doc'})).changed).toBe(true)
+ expect(state.reviewStatus).toBe('UNREVIEWED');expect(state.committedLogs).toBe(1)
 })

@@ -460,6 +460,7 @@ enum WarehouseDocType {
 enum WarehouseDocStatus {
   POSTED // 未审核（已制单过账，仓库可改）
   CONFIRMED // 已审核（会计锁定，改单需先反审核）
+  VOIDED // 已作废（原单与原流水保留，库存以反向流水冲销）
 }
 
 enum WarehouseDocReviewStatus {
@@ -468,6 +469,7 @@ enum WarehouseDocReviewStatus {
 }
 
 enum WarehouseDocLogAction {
+  VOID
   UNREVIEW
   REVIEW
   CREATE

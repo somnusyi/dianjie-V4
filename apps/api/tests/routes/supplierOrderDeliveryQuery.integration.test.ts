@@ -227,6 +227,28 @@ describe('supplier order and delivery list query (integration)', () => {
     expect(bList.json().items[0].creationSource).toBe('历史记录')
   })
 
+  it('reports the persisted replenishment creation type instead of relabelling it as a regular order', async () => {
+    await prisma.purchaseOrderEvent.updateMany({
+      where: { purchaseOrderId: orderAId, eventType: 'CREATED' },
+      data: { metadata: { creationSource: '供应链代门店补货', creationType: '独立补货' } },
+    })
+    try {
+      const response = await app.inject({
+        method: 'GET', url: '/api/orders?page=1&pageSize=20', headers: { 'x-test-actor': 'supplierA' },
+      })
+      expect(response.statusCode).toBe(200)
+      expect(response.json().items[0]).toMatchObject({
+        creationSource: '供应链代门店补货',
+        creationType: '独立补货',
+      })
+    } finally {
+      await prisma.purchaseOrderEvent.updateMany({
+        where: { purchaseOrderId: orderAId, eventType: 'CREATED' },
+        data: { metadata: { creationSource: '门店提交', creationType: '常规订货' } },
+      })
+    }
+  })
+
   it('uses stable creation-source values and never derives a historical row from the current user role', () => {
     expect(orderCreationSource('KITCHEN_LEAD')).toBe('门店端')
     expect(orderCreationSource('MANAGER')).toBe('门店端')
@@ -367,6 +389,34 @@ describe('supplier order and delivery list query (integration)', () => {
     expect(String(sheet.getRow(3).getCell(16).value)).toContain(`DO-A-${suffix}`)
     expect(String(sheet.getRow(3).getCell(17).value)).toContain(`A商品-${suffix}`)
     expect(Number(sheet.getRow(3).getCell(18).value)).toBeGreaterThan(0)
+  })
+
+  it('exports exactly the selected supplier orders and rejects mixed ownership', async () => {
+    const selected = await app.inject({
+      method: 'GET',
+      url: `/api/orders/export.xlsx?orderIds=${encodeURIComponent(orderAId)}`,
+      headers: { 'x-test-actor': 'supplierA' },
+    })
+    expect(selected.statusCode).toBe(200)
+    const workbook = new ExcelJS.Workbook()
+    await workbook.xlsx.load(selected.rawPayload as any)
+    const sheet = workbook.getWorksheet('门店订货单')!
+    expect(sheet.rowCount).toBe(2)
+    expect(sheet.getRow(2).getCell(2).value).toBe(`PO-A-${suffix}`)
+
+    const mixed = await app.inject({
+      method: 'GET',
+      url: `/api/orders/export.xlsx?orderIds=${encodeURIComponent(`${orderAId},${orderBId}`)}`,
+      headers: { 'x-test-actor': 'supplierA' },
+    })
+    expect(mixed.statusCode).toBe(404)
+
+    const overLimit = await app.inject({
+      method: 'GET',
+      url: `/api/orders/export.xlsx?orderIds=${encodeURIComponent(Array.from({ length: 101 }, (_, index) => `order-${index}`).join(','))}`,
+      headers: { 'x-test-actor': 'supplierA' },
+    })
+    expect(overLimit.statusCode).toBe(400)
   })
 
   it('rejects order reads, exports and print artifacts for non-business or unbound roles', async () => {

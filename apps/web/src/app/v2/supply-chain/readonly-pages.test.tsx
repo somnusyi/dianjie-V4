@@ -406,6 +406,58 @@ describe('内部供应链只读 PC 页面回归', () => {
       cleanup(container, root)
     })
 
+    it('供应链勾选订货单后合并打印并记录所选单据', async () => {
+      mockApi(path => path === '/api/orders/print-events'
+        ? Promise.resolve({ count: 1, printStatus: '已发起打印' })
+        : Promise.resolve({ items: [orderRaw], total: 1 }))
+      const print = vi.spyOn(window, 'print').mockImplementation(() => {})
+
+      const { container, root } = render(<OrdersPage />)
+      await waitFor(() => container.textContent?.includes('O-001') ?? false)
+      expect(findButton(container, '合并打印所选（0）')?.disabled).toBe(true)
+
+      await act(async () => {
+        container.querySelector<HTMLInputElement>('input[aria-label="选择订货单 O-001"]')!.click()
+      })
+      await act(async () => {
+        findButton(container, '合并打印所选（1）')!.click()
+        await sleep(0)
+      })
+
+      const printCall = mockFetch.mock.calls.find(([path]) => path === '/api/orders/print-events')
+      expect(printCall).toBeDefined()
+      expect(JSON.parse(String((printCall![1] as RequestInit).body))).toEqual({ action: 'BROWSER_PRINT', orderIds: ['o1'] })
+      expect(print).toHaveBeenCalledOnce()
+      expect(container.querySelector('[data-supply-chain-selected-print]')?.textContent).toContain('O-001')
+
+      cleanup(container, root)
+      print.mockRestore()
+    })
+
+    it('混合品牌的所选订货单仍逐店独立成页并显示正确品牌和收货方', async () => {
+      const dianjie = { ...orderRaw, id: 'o-dianjie', no: 'O-DJ', storeId: 'store-dj', store: { id: 'store-dj', no: 'DJ012', name: '滇界·云南野鲜菌火锅(南京卡子门店)', brandCode: 'DIANJIE' } }
+      const lancang = { ...orderRaw, id: 'o-lancang', no: 'O-LC', storeId: 'store-lc', store: { id: 'store-lc', no: 'DJ027', name: '澜苍谣·宜良烤麻鸭·云傣菜(南京金陵天地店)', brandCode: 'LANCANGYAO' } }
+      mockApi(path => path === '/api/orders/print-events'
+        ? Promise.resolve({ count: 2, printStatus: '已发起打印' })
+        : Promise.resolve({ items: [dianjie, lancang], total: 2 }))
+      const print = vi.spyOn(window, 'print').mockImplementation(() => {})
+      const { container, root } = render(<OrdersPage />)
+      await waitFor(() => container.textContent?.includes('O-LC') ?? false)
+      await act(async () => { container.querySelector<HTMLInputElement>('input[aria-label="全选当前页订货单"]')!.click() })
+      await act(async () => { findButton(container, '合并打印所选（2）')!.click(); await sleep(0) })
+      const pages = Array.from(container.querySelectorAll('.supply-chain-selected-print-page'))
+      expect(pages).toHaveLength(2)
+      expect(pages[0].textContent).toContain('品牌：滇界')
+      expect(pages[0].textContent).toContain('门店：南京卡子门店')
+      expect(pages[0].textContent).not.toContain('澜苍谣')
+      expect(pages[1].textContent).toContain('品牌：澜苍谣')
+      expect(pages[1].textContent).toContain('门店：南京金陵天地店')
+      expect(pages[1].textContent).not.toContain('滇界·')
+      expect(print).toHaveBeenCalledOnce()
+      cleanup(container, root)
+      print.mockRestore()
+    })
+
     it('使用当前已应用筛选导出全部匹配订货单', async () => {
       mockApi(() => Promise.resolve({ items: [orderRaw], total: 1 }))
       mockDownload.mockResolvedValue({ blob: new Blob(['xlsx']), filename: '门店订货单.xlsx' })
@@ -589,7 +641,7 @@ describe('内部供应链只读 PC 页面回归', () => {
       })
       act(() => findButton(container, '查询')!.click())
       await waitFor(() => lastResourceUrl('/api/deliveries').searchParams.get('status') === 'SHIPPED')
-      await act(async () => { findButton(container, '导出')!.click(); await sleep(0) })
+      await act(async () => { findButton(container, '导出筛选结果')!.click(); await sleep(0) })
       await waitFor(() => mockDownload.mock.calls.length === 1)
 
       const url = new URL(String(mockDownload.mock.calls[0][0]), 'http://localhost')
@@ -620,6 +672,7 @@ describe('内部供应链只读 PC 页面回归', () => {
 
       const keywordInput = getInputByLabel(container, '关键字') as HTMLInputElement
       const storeSelect = getInputByLabel(container, '门店') as HTMLSelectElement
+      const sortSelect = getInputByLabel(container, '排序') as HTMLSelectElement
       const dateFromInput = getInputByLabel(container, '开始日期') as HTMLInputElement
       const dateToInput = getInputByLabel(container, '结束日期') as HTMLInputElement
       const statusSelect = getInputByLabel(container, '状态') as HTMLSelectElement
@@ -630,6 +683,7 @@ describe('内部供应链只读 PC 页面回归', () => {
       act(() => {
         setInputValue(keywordInput, 'D-001')
         setSelectValue(storeSelect, 'store-1')
+        setSelectValue(sortSelect, 'STORE_NAME_ASC')
         setInputValue(dateFromInput, '2026-07-01')
         setInputValue(dateToInput, '2026-07-31')
         setSelectValue(statusSelect, 'SHIPPED')
@@ -642,6 +696,7 @@ describe('内部供应链只读 PC 页面回归', () => {
       const url = lastResourceUrl('/api/deliveries')
       expect(url.searchParams.get('keyword')).toBe('D-001')
       expect(url.searchParams.get('storeId')).toBe('store-1')
+      expect(url.searchParams.get('sort')).toBe('STORE_NAME_ASC')
       expect(url.searchParams.get('dateFrom')).toBe('2026-07-01')
       expect(url.searchParams.get('dateTo')).toBe('2026-07-31')
       expect(url.searchParams.get('status')).toBe('SHIPPED')
@@ -655,6 +710,7 @@ describe('内部供应链只读 PC 页面回归', () => {
 
       const paged = lastResourceUrl('/api/deliveries')
       expect(paged.searchParams.get('status')).toBe('SHIPPED')
+      expect(paged.searchParams.get('sort')).toBe('STORE_NAME_ASC')
       expect(paged.searchParams.get('page')).toBe('2')
       expect(paged.searchParams.get('pageSize')).toBe('50')
 

@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import { ensureWarehouseDocInTransaction, type EnsureWarehouseDocInput } from './warehouseDocs'
 import {
   prepareBatchManualWarehouseInbound, prepareBatchManualWarehouseOutbound,
+  recordBatchManualWarehouseInbound,
   type BatchManualWarehouseInboundInput, type BatchManualWarehouseOutboundInput,
 } from './warehouseLedger'
 
@@ -15,7 +16,7 @@ export async function createReviewInbound(tx: Prisma.TransactionClient, input: B
   const { warehouseId, lines } = await prepareBatchManualWarehouseInbound(input, tx)
   const supplier = input.supplierId ? await tx.supplier.findFirst({ where: { id: input.supplierId, tenantId: input.tenantId, status: 'ENABLED', businessScopes: { has: 'WAREHOUSE_UPSTREAM' } } }) : null
   if (!supplier) throw fail('请选择启用的总仓上游供应商', 400)
-  return ensureWarehouseDocInTransaction(tx, {
+  const result = await ensureWarehouseDocInTransaction(tx, {
     ...input, type: 'MANUAL_INBOUND', warehouseId, postingPolicy: 'REVIEW',
     supplierName: supplier.name, idempotencyKey: input.documentKey,
     lines: lines.map(line => ({
@@ -27,6 +28,24 @@ export async function createReviewInbound(tx: Prisma.TransactionClient, input: B
       note: input.items[line.index].note,
     })),
   })
+  if (!result.created) return result
+  const posted = await recordBatchManualWarehouseInbound({ ...input, warehouseId, idempotencyKey: reviewPostingKey(result.doc.id) }, tx)
+  for (const line of result.doc.lines) {
+    const movement = posted.movements.find(row => row.productId === line.productId)
+    if (!movement) throw fail(`第${line.lineNo}行入库流水缺失，提交已回滚`)
+    const amount = movement.valueDelta.abs()
+    await tx.warehouseDocLine.update({
+      where: { id: line.id },
+      data: { movementId: movement.id, amount, unitPrice: amount.div(line.quantity).toDecimalPlaces(6) },
+    })
+  }
+  const total = await tx.warehouseDocLine.aggregate({ where: { tenantId: input.tenantId, docId: result.doc.id }, _sum: { amount: true } })
+  const doc = await tx.warehouseDoc.update({
+    where: { id: result.doc.id },
+    data: { postedAt: new Date(), totalAmount: total._sum.amount || 0 },
+    include: { lines: true },
+  })
+  return { doc, created: true }
 }
 
 export async function createReviewOutbound(tx: Prisma.TransactionClient, input: BatchManualWarehouseOutboundInput & Header) {

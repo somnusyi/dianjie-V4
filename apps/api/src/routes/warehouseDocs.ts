@@ -9,6 +9,7 @@ import {
   editWarehouseDoc,
   normalizeWarehouseDocAttachments,
   unconfirmWarehouseDoc,
+  voidWarehouseInboundDoc,
 } from '../services/warehouseDocs'
 import { signOssKey } from './upload'
 import {registerDocumentQualityImageRoutes} from './documentQualityImage'
@@ -70,7 +71,7 @@ export const warehouseDocsRoutes: FastifyPluginAsync = async app => {
   app.get('/', authRead, async (req: any) => {
     const query = req.query as any
     const type = query.type === 'MANUAL_INBOUND' || query.type === 'MANUAL_OUTBOUND' ? query.type : undefined
-    const status = query.status === 'POSTED' || query.status === 'CONFIRMED' ? query.status : undefined
+    const status = query.status === 'POSTED' || query.status === 'CONFIRMED' || query.status === 'VOIDED' ? query.status : undefined
     const page = Math.max(1, Number(query.page) || 1)
     const pageSize = Math.min(200, Math.max(1, Number(query.pageSize) || 20))
     const where: any = { tenantId: req.user.tenantId }
@@ -191,9 +192,9 @@ export const warehouseDocsRoutes: FastifyPluginAsync = async app => {
     catch(error:any){if(error.statusCode)return reply.code(error.statusCode).send({error:error.message});throw error}
   })
 
-  // 入库反审核归供应链，必填退回原因.
+  // 入库反审核归供应链；原因可留空，历史客户端仍可传入备注。
   app.post('/:id/unconfirm', authAudit, async (req: any, reply: any) => {
-    const parsed = z.object({ reason: z.string().trim().min(2, '请填写退回原因').max(240) }).safeParse(req.body)
+    const parsed = z.object({ reason: z.string().trim().max(240).optional() }).safeParse(req.body ?? {})
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
     try {
       const candidate=await prisma.warehouseDoc.findFirst({where:{id:String(req.params.id),tenantId:req.user.tenantId},select:{type:true}})
@@ -205,6 +206,23 @@ export const warehouseDocsRoutes: FastifyPluginAsync = async app => {
         reason: parsed.data.reason,
       })
       return { ok: true, status: result.doc.status }
+    } catch (error: any) {
+      if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
+      throw error
+    }
+  })
+
+  app.post('/:id/void', authAudit, async (req: any, reply: any) => {
+    const parsed = z.object({ reason: z.string().trim().min(2, '请填写作废原因').max(240) }).safeParse(req.body)
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
+    try {
+      const result = await voidWarehouseInboundDoc({
+        tenantId: req.user.tenantId,
+        userId: req.user.userId,
+        docId: String(req.params.id),
+        reason: parsed.data.reason,
+      })
+      return { ok: true, changed: result.changed, status: result.doc.status }
     } catch (error: any) {
       if (error?.statusCode) return reply.status(error.statusCode).send({ error: error.message })
       throw error

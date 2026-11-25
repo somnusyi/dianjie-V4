@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { deliveryScheduleText, isDeliveryScheduleDate, nextDeliveryScheduleDates } from './delivery-rule-cycle'
+import { deliveryOrderDayProjection, deliveryScheduleText, isDeliveryScheduleDate, nextDeliveryScheduleDates } from './delivery-rule-cycle'
 
 describe('配送班表送货规则前端预览', () => {
   it('按星期送货支持多选', () => {
@@ -20,5 +20,17 @@ describe('配送班表送货规则前端预览', () => {
     const rule = { deliveryScheduleMode: 'INTERVAL', deliveryIntervalDays: 6, deliveryIntervalStart: '2026-09-01' }
     expect(nextDeliveryScheduleDates(rule, '2026-09-02', 2)).toEqual(['2026-09-08', '2026-09-15'])
     expect(isDeliveryScheduleDate({ deliveryScheduleMode: 'INTERVAL', deliveryIntervalDays: 7, deliveryIntervalStart: '2026-09-01' }, '2026-09-01')).toBe(false)
+  })
+
+  it('逐日显示下单时段并映射到第 N 个送货日', () => {
+    const rule = { deliveryScheduleMode: 'WEEKLY', weekdays: [1, 3, 5], leadDays: 2, orderWindowStart: '08:00', orderWindowEnd: '18:00', status: 'ENABLED' }
+    expect(deliveryOrderDayProjection(rule, '2026-09-08')).toEqual({ arrivalDate: '2026-09-11', windowLabel: '08:00～18:00' })
+  })
+
+  it('全天规则仍显示下单日，停用和生效区间外不显示', () => {
+    const rule = { deliveryScheduleMode: 'WEEKLY', weekdays: [1], leadDays: 1, effectiveFrom: '2026-09-08', effectiveTo: '2026-09-30', status: 'ENABLED' }
+    expect(deliveryOrderDayProjection(rule, '2026-09-08')).toEqual({ arrivalDate: '2026-09-14', windowLabel: '全天' })
+    expect(deliveryOrderDayProjection(rule, '2026-09-07')).toBeNull()
+    expect(deliveryOrderDayProjection({ ...rule, status: 'DISABLED' }, '2026-09-08')).toBeNull()
   })
 })

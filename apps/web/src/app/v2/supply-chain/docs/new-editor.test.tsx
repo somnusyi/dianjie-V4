@@ -21,7 +21,7 @@ const change = async (input: HTMLInputElement | HTMLSelectElement, value: string
   })
 }
 beforeEach(() => {
-  mocks.pending=false;mocks.snapshot.products[0].displayMatched=true
+  mocks.pending=false;mocks.snapshot.products.splice(1);mocks.snapshot.products[0].displayMatched=true
   vi.clearAllMocks(); localStorage.setItem('tenant',JSON.stringify({name:'测试机构'}))
   mocks.flush.mockResolvedValue({id:'draft-original',version:4})
   mocks.fetch.mockImplementation(async (url: string) => {
@@ -59,19 +59,57 @@ it('remote candidate search keeps the current draft inputs and exposes a later s
  mocks.fetch.mockImplementation(async(path:string,init:any)=>String(path).includes('q=遥远物料')||String(path).includes('q=%E9%81%A5%E8%BF%9C%E7%89%A9%E6%96%99')?{items:[{id:'far-source',code:'FAR',name:'遥远物料',purchaseUnit:'箱',inventoryUnit:'kg',purchaseToInventoryFactor:5}]}:initial(path,init))
  await change(host.querySelector('input[aria-label="查询可用物品"]')!,'遥远物料')
  await act(async()=>button('查询物品').click())
- expect(host.querySelector<HTMLSelectElement>('select[aria-label="添加入库物品"]')!.textContent).toContain('遥远物料')
+ expect(host.querySelector('[aria-label="入库物品候选"]')!.textContent).toContain('遥远物料')
  expect(host.querySelector<HTMLInputElement>('input[aria-label="测试土豆数量"]')!.value).toBe('2')
  expect(host.querySelector<HTMLInputElement>('input[aria-label="测试土豆金额"]')!.value).toBe('6')
 })
 afterEach(async () => {await act(async()=>root.unmount());host.remove();localStorage.clear()})
 async function ready() {
   await act(async () => root.render(<WarehouseDocumentEditor fullPage canEdit canAudit canReview onClose={()=>{}} onChanged={()=>{}} onCreated={mocks.created} />))
-  await change(host.querySelector('select[aria-label="添加入库物品"]')!,'product')
-  await act(async()=>button('添加物品').click())
+  await act(async()=>host.querySelector<HTMLInputElement>('input[aria-label="选择测试土豆"]')!.click())
+  await act(async()=>button('添加已选（1）').click())
   await change(host.querySelector<HTMLSelectElement>('select[aria-label="供应商"]')!,'supplier')
   await change(host.querySelector('input[aria-label="测试土豆数量"]')!,'2')
   await change(host.querySelector('input[aria-label="测试土豆金额"]')!,'6')
 }
+it('批量勾选、加载更多保留选择，并一次过滤重复和不可用商品',async()=>{
+  mocks.snapshot.products.push(
+    {id:'second',name:'测试萝卜',code:'P002',spec:null,category:null,enabled:true,displayMatched:true,units:{purchaseUnit:'箱',inventoryUnit:'kg',inventoryUnitsPerPurchaseUnit:5,status:'VERIFIED',structured:{purchase:true}}} as any,
+    {id:'later',name:'测试菌菇',code:'P003',spec:null,category:null,enabled:true,displayMatched:true,units:{purchaseUnit:'箱',inventoryUnit:'kg',inventoryUnitsPerPurchaseUnit:2,status:'VERIFIED',structured:{purchase:true}}} as any,
+  )
+  mocks.fetch.mockImplementation(async (url:string) => {
+    if(url.includes('cursor=next'))return {items:[{id:'later',code:'P003',name:'测试菌菇',purchaseUnit:'箱',inventoryUnit:'kg',purchaseToInventoryFactor:2},{id:'product',code:'P001',name:'测试土豆',purchaseUnit:'箱',inventoryUnit:'kg',purchaseToInventoryFactor:10}]}
+    if(url.startsWith('/api/warehouse-inventory/inbound-candidates'))return {items:[{id:'product',code:'P001',name:'测试土豆',purchaseUnit:'箱',inventoryUnit:'kg',purchaseToInventoryFactor:10},{id:'second',code:'P002',name:'测试萝卜',purchaseUnit:'箱',inventoryUnit:'kg',purchaseToInventoryFactor:5},{id:'blocked',code:'OFF',name:'停用品',purchaseUnit:'箱',inventoryUnit:'kg',purchaseToInventoryFactor:1,eligible:false}],nextCursor:'next'}
+    if(url.startsWith('/api/warehouse-inventory?page'))return {warehouse:{id:'warehouse',code:'WH',name:'测试仓'}}
+    if(url.startsWith('/api/suppliers'))return []
+    throw Error(`Unexpected ${url}`)
+  })
+  await act(async()=>root.render(<WarehouseDocumentEditor fullPage canEdit canAudit canReview onClose={()=>{}} onChanged={()=>{}}/>))
+  expect(host.querySelector('input[aria-label="选择停用品"]')).toBeNull()
+  await act(async()=>host.querySelector<HTMLInputElement>('input[aria-label="选择测试土豆"]')!.click())
+  await act(async()=>button('加载更多物品').click())
+  expect(host.querySelector<HTMLInputElement>('input[aria-label="选择测试土豆"]')!.checked).toBe(true)
+  await act(async()=>button('全选当前候选').click())
+  expect(button('添加已选（3）')).toBeTruthy()
+  await act(async()=>button('添加已选（3）').click())
+  expect(host.querySelectorAll('tbody tr')).toHaveLength(3)
+  expect(host.textContent).not.toContain('停用品')
+  mocks.snapshot.products.splice(1)
+})
+it('批量添加不会超过200行上限',async()=>{
+  const products=Array.from({length:201},(_,index)=>({id:`limit-${index}`,code:`L${index}`,name:`上限商品${index}`,purchaseUnit:'箱',inventoryUnit:'kg',purchaseToInventoryFactor:1}))
+  mocks.fetch.mockImplementation(async (url:string) => {
+    if(url.startsWith('/api/warehouse-inventory/inbound-candidates'))return {items:products}
+    if(url.startsWith('/api/warehouse-inventory?page'))return {warehouse:{id:'warehouse',code:'WH',name:'测试仓'}}
+    if(url.startsWith('/api/suppliers'))return []
+    throw Error(`Unexpected ${url}`)
+  })
+  await act(async()=>root.render(<WarehouseDocumentEditor fullPage canEdit canAudit canReview onClose={()=>{}} onChanged={()=>{}}/>))
+  await act(async()=>button('全选当前候选').click())
+  await act(async()=>button('添加已选（201）').click())
+  expect(host.querySelector('[role="alert"]')?.textContent).toContain('最多200种商品')
+  expect(host.querySelectorAll('tbody tr')).toHaveLength(0)
+})
 it('new editor has four independent footer actions; save does not submit',async()=>{
   await ready()
   expect(Array.from(host.querySelectorAll('footer button')).map(item=>item.textContent)).toEqual(['取消','保存','提交','审核'])
@@ -164,7 +202,7 @@ it('invalid date range keeps input and rejects Submit before any posting request
 
 it('outbound uses the same four footer actions and restores base-unit quantity/reason while allowing automatic cost',async()=>{
  await act(async()=>root.render(<WarehouseDocumentEditor newType="MANUAL_OUTBOUND" fullPage canEdit canAudit canReview onClose={()=>{}} onChanged={()=>{}} onCreated={mocks.created}/>))
- await change(host.querySelector('select[aria-label="添加出库物品"]')!,'product');await act(async()=>button('添加物品').click())
+ await act(async()=>host.querySelector<HTMLInputElement>('input[aria-label="选择测试土豆"]')!.click());await act(async()=>button('添加已选（1）').click())
  await change(host.querySelector('input[aria-label="测试土豆数量"]')!,'2')
  await change(host.querySelector('select[aria-label="出库用途"]')!,'SAMPLE_ISSUE')
  await change(host.querySelector('input[aria-label="出库原因/去向"]')!,'合成样品领用')

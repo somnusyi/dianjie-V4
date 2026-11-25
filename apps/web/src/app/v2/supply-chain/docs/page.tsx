@@ -21,7 +21,7 @@ type DocRow = {
   reason: string | null
   note: string | null
   effectiveAt: string
-  status: 'POSTED' | 'CONFIRMED'
+  status: 'POSTED' | 'CONFIRMED' | 'VOIDED'
   reviewStatus: 'UNREVIEWED' | 'REVIEWED'
   lineCount: number
   totalAmount: number
@@ -53,7 +53,7 @@ type DocLine = {
 
 type DocLog = {
   id: string
-  action: 'CREATE' | 'CONFIRM' | 'UNCONFIRM' | 'EDIT' | 'REVIEW' | 'UNREVIEW'
+  action: 'CREATE' | 'CONFIRM' | 'UNCONFIRM' | 'EDIT' | 'REVIEW' | 'UNREVIEW' | 'VOID'
   actorName: string | null
   reason: string | null
   detail: any
@@ -68,6 +68,7 @@ type SupplierOption = { id: string; name: string; no?: string }
 const EDIT_ROLES = new Set(['SUPER_ADMIN', 'ADMIN', 'PURCHASER', 'SUPPLY_CHAIN'])
 
 const LOG_ACTION_LABEL: Record<DocLog['action'], string> = {
+  VOID: '作废',
   REVIEW: '复审',
   UNREVIEW: '取消复审',
   CREATE: '制单',
@@ -109,6 +110,9 @@ function downloadCsv(filename: string, rows: Array<Array<string | number | null 
 }
 
 function StatusBadge({ status }: { status: DocRow['status'] }) {
+  if (status === 'VOIDED') {
+    return <span className="rounded-full bg-red-50 px-2 py-0.5 text-caption text-red-700">已作废</span>
+  }
   if (status === 'CONFIRMED') {
     return <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-caption text-emerald-700">已审核</span>
   }
@@ -208,7 +212,7 @@ export default function WarehouseDocsPage() {
       } while (all.length < totalRows)
       downloadCsv(`${type === 'MANUAL_INBOUND' ? '入库单据审核' : '出库单据审核'}_${from || '全部'}_${to || '全部'}.csv`, [
         ['单据编号', '单据日期', type === 'MANUAL_INBOUND' ? '供应商' : '去向/原因', '总金额', '商品行数', type === 'MANUAL_INBOUND' ? '随货单据数' : '现场证据数', '审核状态', '复审状态', '反审核时间', '退回原因', '创建时间', '备注'],
-        ...all.map(doc => [doc.docNo, fmtDay(doc.effectiveAt), type === 'MANUAL_INBOUND' ? doc.supplierName : doc.reason, doc.totalAmount, doc.lineCount, doc.attachmentCount, doc.status === 'CONFIRMED' ? '已审核' : '待审核', doc.reviewStatus === 'REVIEWED' ? '已复审' : '未复审', fmtTime(doc.unauditedAt), doc.unauditReason, fmtTime(doc.createdAt), doc.note]),
+        ...all.map(doc => [doc.docNo, fmtDay(doc.effectiveAt), type === 'MANUAL_INBOUND' ? doc.supplierName : doc.reason, doc.totalAmount, doc.lineCount, doc.attachmentCount, doc.status === 'CONFIRMED' ? '已审核' : doc.status === 'VOIDED' ? '已作废' : '待审核', doc.reviewStatus === 'REVIEWED' ? '已复审' : '未复审', fmtTime(doc.unauditedAt), doc.unauditReason, fmtTime(doc.createdAt), doc.note]),
       ])
     } catch (reason: any) {
       setError(String(reason?.message || '导出失败'))
@@ -223,7 +227,7 @@ export default function WarehouseDocsPage() {
       title: type === 'MANUAL_INBOUND' ? '入库单据审核' : '出库单据审核',
       subtitle: '当前筛选结果（全部页）',
       headers: ['单据编号', '单据日期', type === 'MANUAL_INBOUND' ? '供应商' : '去向/原因', '总金额', '商品行数', type === 'MANUAL_INBOUND' ? '随货单据数' : '现场证据数', '审核状态', '复审状态', '反审核时间', '退回原因', '创建时间', '备注'],
-      rows: rows.map(doc => [doc.docNo, fmtDay(doc.effectiveAt), type === 'MANUAL_INBOUND' ? doc.supplierName : doc.reason, doc.totalAmount, doc.lineCount, doc.attachmentCount, doc.status === 'CONFIRMED' ? '已审核' : '待审核', doc.reviewStatus === 'REVIEWED' ? '已复审' : '未复审', fmtTime(doc.unauditedAt), doc.unauditReason, fmtTime(doc.createdAt), doc.note]),
+      rows: rows.map(doc => [doc.docNo, fmtDay(doc.effectiveAt), type === 'MANUAL_INBOUND' ? doc.supplierName : doc.reason, doc.totalAmount, doc.lineCount, doc.attachmentCount, doc.status === 'CONFIRMED' ? '已审核' : doc.status === 'VOIDED' ? '已作废' : '待审核', doc.reviewStatus === 'REVIEWED' ? '已复审' : '未复审', fmtTime(doc.unauditedAt), doc.unauditReason, fmtTime(doc.createdAt), doc.note]),
     }
   }
 
@@ -242,7 +246,7 @@ export default function WarehouseDocsPage() {
       <header className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h1 className="text-title font-semibold">单据审核</h1>
-          <p className="text-caption text-gray2">入库/出库单据：新单提交和审核不记库存，供应链复审后才改变库存和金额；历史单据保留原记录</p>
+          <p className="text-caption text-gray2">入库单提交后即计入库存，审核与复审用于核对；复审后可取消复审、反审核并修改。出库单沿用原流程。</p>
         </div>
         <div className="flex flex-wrap gap-2">
           {canEdit && <a href="/v2/supply-chain/docs/new" className="rounded-cta border border-border bg-white px-4 py-2 text-button">新增入库单</a>}
@@ -270,6 +274,7 @@ export default function WarehouseDocsPage() {
               <option value="">全部状态</option>
               <option value="POSTED">待审核</option>
               <option value="CONFIRMED">已审核</option>
+              <option value="VOIDED">已作废</option>
             </select>
           </label>
           <DateRangeCalendar value={{ from, to }} onChange={range => { setFrom(range.from); setTo(range.to); setPage(1) }} label="单据日期" />
@@ -325,8 +330,9 @@ export default function WarehouseDocsPage() {
                     {doc.status === 'POSTED' ? <>
                       {canEdit && <a href={`/v2/supply-chain/docs/${encodeURIComponent(doc.id)}/edit`} className="hover:underline">编辑</a>}
                       {canAudit && <button onClick={() => openDoc(doc.id, 'audit')}>审核</button>}
-                    </> : doc.reviewStatus === 'REVIEWED'
-                      ? null
+                      {doc.type === 'MANUAL_INBOUND' && canReview && <button className="text-red-700" onClick={() => openDoc(doc.id, 'void')}>作废</button>}
+                    </> : doc.status === 'VOIDED' ? null : doc.reviewStatus === 'REVIEWED'
+                      ? doc.type === 'MANUAL_INBOUND' && canReview && <button onClick={() => openDoc(doc.id, 'unreview')}>取消复审</button>
                       : <>{canAudit && <button onClick={() => openDoc(doc.id, 'unconfirm')}>反审核</button>}{canReview && <button onClick={() => openDoc(doc.id, 'review')}>复审</button>}</>}
                     <span aria-hidden="true" className="text-gray3">｜</span>
                     <button onClick={() => openDoc(doc.id, 'print')}>打印</button>

@@ -28,6 +28,7 @@ import {
   hasActiveDeliveryFilters,
   keepDeliveryFiltersForPage,
   orderDeliveryDateText,
+  orderDateTimeText,
   orderDeliveryPaginationRange,
   orderDeliveryTotalPages,
   projectDeliveryRow,
@@ -71,6 +72,10 @@ const DELIVERY_COLUMNS: readonly OrderCenterTableColumn<ProjectedDelivery>[] = [
     renderCell: delivery => delivery.purchaseOrder?.no || '—',
   },
   {
+    id: 'source', header: '来源', defaultWidth: 135, cellClassName: 'text-gray2',
+    renderCell: delivery => delivery.sourceType === 'REPLENISHMENT' ? `补货单 ${delivery.sourceNo || ''}` : '普通订货',
+  },
+  {
     id: 'store',
     header: '门店',
     defaultWidth: 136,
@@ -79,10 +84,21 @@ const DELIVERY_COLUMNS: readonly OrderCenterTableColumn<ProjectedDelivery>[] = [
   },
   {
     id: 'createdAt',
-    header: '创建时间',
+    header: '订货时间',
+    defaultWidth: 120,
+    cellClassName: 'font-num text-gray2',
+    renderCell: delivery => orderDeliveryDateText(delivery.orderedAt),
+  },
+  {
+    id: 'deliveryCreatedAt',
+    header: '配送单创建时间',
     defaultWidth: 110,
     cellClassName: 'font-num text-gray2',
     renderCell: delivery => orderDeliveryDateText(delivery.createdAt),
+  },
+  {
+    id: 'deliveredAt', header: '实际送达时间', defaultWidth: 155, cellClassName: 'font-num text-gray2',
+    renderCell: delivery => orderDateTimeText(delivery.deliveredAt),
   },
   {
     id: 'shippedAt',
@@ -140,6 +156,7 @@ export default function InternalSupplyChainDeliveriesPage() {
   const [stores, setStores] = useState<Store[]>([])
   const [dateError, setDateError] = useState<string | null>(null)
   const [exporting, setExporting] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const abortControllerRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
@@ -188,6 +205,20 @@ export default function InternalSupplyChainDeliveriesPage() {
   const totalPages = useMemo(() => orderDeliveryTotalPages(total, filters.pageSize), [total, filters.pageSize])
   const range = useMemo(() => orderDeliveryPaginationRange(filters.page, filters.pageSize, total), [filters.page, filters.pageSize, total])
   const filterActive = hasActiveDeliveryFilters(draftFilters)
+  const pageIds = (deliveries || []).map(delivery => delivery.id)
+  const allPageSelected = pageIds.length > 0 && pageIds.every(id => selectedIds.has(id))
+  const columns = useMemo<readonly OrderCenterTableColumn<ProjectedDelivery>[]>(() => [
+    {
+      id: 'selected', header: '选择', defaultWidth: 64,
+      renderHeader: () => <input aria-label="全选当前页配送单" type="checkbox" checked={allPageSelected} onChange={() => setSelectedIds(current => { const next = new Set(current); pageIds.forEach(id => allPageSelected ? next.delete(id) : next.add(id)); return next })} />,
+      renderCell: delivery => <input aria-label={`选择配送单 ${delivery.no}`} type="checkbox" checked={selectedIds.has(delivery.id)} onChange={() => setSelectedIds(current => { const next = new Set(current); next.has(delivery.id) ? next.delete(delivery.id) : next.add(delivery.id); return next })} />,
+    },
+    ...DELIVERY_COLUMNS.map(column => column.id === 'store' ? {
+      ...column,
+      onHeaderClick: () => { const sort = filters.sort === 'STORE_NAME_ASC' ? 'STORE_NAME_DESC' : 'STORE_NAME_ASC'; setDraftFilters(current => ({ ...current, sort, page: 1 })); setFilters(current => ({ ...current, sort, page: 1 })) },
+      headerSortDirection: filters.sort === 'STORE_NAME_ASC' ? 'asc' as const : filters.sort === 'STORE_NAME_DESC' ? 'desc' as const : null,
+    } : column),
+  ], [allPageSelected, filters.sort, pageIds.join('|'), selectedIds])
 
   function updateDraftFilters(changes: Partial<DeliveryFilters>) {
     const nextDateFrom = changes.dateFrom !== undefined ? changes.dateFrom : draftFilters.dateFrom
@@ -200,6 +231,7 @@ export default function InternalSupplyChainDeliveriesPage() {
     const validationError = validateOrderDeliveryDateRange(draftFilters.dateFrom, draftFilters.dateTo)
     setDateError(validationError)
     if (validationError) return
+    setSelectedIds(new Set())
     setFilters({
       ...draftFilters,
       keyword: draftFilters.keyword.trim(),
@@ -212,6 +244,7 @@ export default function InternalSupplyChainDeliveriesPage() {
     setDraftFilters(cleared)
     setFilters(cleared)
     setDateError(null)
+    setSelectedIds(new Set())
   }
 
   async function exportDeliveries() {
@@ -234,6 +267,15 @@ export default function InternalSupplyChainDeliveriesPage() {
     } finally {
       setExporting(false)
     }
+  }
+
+  async function exportSelectedDetails() {
+    if (exporting || selectedIds.size === 0) return
+    setExporting(true); setError(null)
+    try {
+      const { blob, filename } = await apiDownload(`/api/deliveries/export-details.xlsx?ids=${encodeURIComponent([...selectedIds].join(','))}`, '配送单商品明细.xlsx')
+      const href = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = href; link.download = filename; document.body.appendChild(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(href), 5_000)
+    } catch (reason: any) { setError(String(reason?.message || reason)) } finally { setExporting(false) }
   }
 
   async function loadPrintReport(): Promise<TableReport> {
@@ -293,6 +335,22 @@ export default function InternalSupplyChainDeliveriesPage() {
               <option key={store.id} value={store.id}>{store.no} · {store.name}</option>
             ))}
           </FilterSelect>
+          <FilterSelect
+            label="日期口径"
+            value={draftFilters.dateField}
+            onChange={value => updateDraftFilters({ dateField: value as DeliveryFilters['dateField'] })}
+          >
+            <option value="ORDERED">订货日期</option><option value="DELIVERY_CREATED">配送单创建日期</option><option value="SHIPPED">发货日期</option>
+          </FilterSelect>
+          <FilterSelect
+            label="排序"
+            value={draftFilters.sort}
+            onChange={value => updateDraftFilters({ sort: value as DeliveryFilters['sort'] })}
+          >
+            <option value="DATE_DESC">配送单创建日期倒序</option>
+            <option value="STORE_NAME_ASC">门店名称升序</option>
+            <option value="STORE_NAME_DESC">门店名称降序</option>
+          </FilterSelect>
           <FilterInput
             label="开始日期"
             type="date"
@@ -338,7 +396,8 @@ export default function InternalSupplyChainDeliveriesPage() {
             onClick={exportDeliveries}
             disabled={exporting || Boolean(dateError)}
             className="rounded-cta border border-accent bg-white px-4 py-2 text-button text-accent disabled:opacity-40"
-          >{exporting ? '正在导出…' : '导出'}</button>
+          >{exporting ? '正在导出…' : '导出筛选结果'}</button>
+          <button onClick={exportSelectedDetails} disabled={exporting || selectedIds.size === 0} className="rounded-cta border border-accent bg-white px-4 py-2 text-button text-accent disabled:opacity-40">导出所选明细（{selectedIds.size}）</button>
         </div>
 
         {dateError && (
@@ -364,13 +423,13 @@ export default function InternalSupplyChainDeliveriesPage() {
             <OrderCenterHorizontalTable>
               <OrderCenterResizableTable
                 ariaLabel="配送单查询结果"
-                columns={DELIVERY_COLUMNS}
+                columns={columns}
                 rows={deliveries}
                 rowKey={delivery => delivery.id}
                 footer={(
                   <tfoot className="border-t border-border bg-bg">
                     <tr>
-                      <td colSpan={9} className="px-4 py-3 text-right font-semibold">合计</td>
+                      <td colSpan={11} className="px-4 py-3 text-right font-semibold">合计</td>
                       <td className="px-4 py-3 text-right font-num font-semibold">
                         {moneyText(deliveries.reduce((sum, delivery) => sum + Number(delivery.profitability?.shippedAmount ?? delivery.actualTotalAmount ?? 0), 0))}
                       </td>

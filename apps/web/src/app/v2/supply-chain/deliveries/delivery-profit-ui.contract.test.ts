@@ -29,4 +29,10 @@ describe('delivery cost and profit UI contract', () => {
     expect(detail).toContain('查看订货与配送流程')
     expect(detail).toContain('前往集团毛利明细表核对')
   })
+
+  it('shows the actual delivery timestamp with date and minute precision in list and detail', () => {
+    expect(list).toContain("header: '实际送达时间'")
+    expect(list).toContain('orderDateTimeText(delivery.deliveredAt)')
+    expect(detail).toContain('<Fact label="实际送达时间" value={orderDateTimeText(delivery.deliveredAt)} />')
+  })
 })

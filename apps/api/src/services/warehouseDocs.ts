@@ -254,6 +254,7 @@ export async function confirmWarehouseDocInTransaction(tx: Prisma.TransactionCli
     const doc = await tx.warehouseDoc.findFirst({ where: { id: input.docId, tenantId: input.tenantId } })
     if (!doc) throw docError('单据不存在', 404)
     if (doc.status === 'CONFIRMED') return { doc, changed: false }
+    if (doc.status !== 'POSTED') throw docError('只有待审核单据可以审核', 409)
     const updated = await tx.warehouseDoc.update({
       where: { id: doc.id },
       data: { status: 'CONFIRMED', confirmedById: input.userId, confirmedAt: new Date() },
@@ -281,7 +282,7 @@ export async function reviewWarehouseDoc(input: {tenantId:string;userId:string;d
   if(!doc) throw docError('单据不存在',404)
   if(doc.status!=='CONFIRMED') throw docError('请先完成单据审核，再由供应链复审')
   if(doc.reviewStatus==='REVIEWED') return {doc,changed:false}
-  if(doc.postingPolicy === 'REVIEW') {
+  if(doc.postingPolicy === 'REVIEW' && !doc.postedAt) {
     if(doc.postedAt || doc.lines.some(line => line.movementId)) throw docError('单据过账记录不一致，请核对后重试')
     const common = {tenantId:input.tenantId,userId:input.userId,warehouseId:doc.warehouseId,effectiveAt:doc.effectiveAt,idempotencyKey:reviewPostingKey(doc.id)}
     const inbound = {...common,supplierId:doc.supplierId,sourceName:doc.supplierName,note:doc.note,items:doc.lines.map(line=>({productId:line.productId,purchaseQuantity:line.quantity,totalAmount:line.amount,isGift:line.isGift,batchNo:line.batchNo,manufactureDate:line.manufactureDate,expiryDate:line.expiryDate,note:line.note}))}
@@ -308,25 +309,31 @@ export async function reviewWarehouseDoc(input: {tenantId:string;userId:string;d
  })
 }
 
-/** DEC043: review is final; legacy cancellation URLs are explicitly rejected. */
+/** 入库取消复审只撤销复审状态；已入库流水继续保留，后续可反审核改单。 */
 export async function unreviewWarehouseDoc(input:{tenantId:string;userId:string;docId:string}):Promise<{doc:Prisma.WarehouseDocGetPayload<{}>;changed:boolean}> {
   return serializableWithRetry(async tx=>{
+    await tx.$queryRaw`SELECT id FROM warehouse_docs WHERE id=${input.docId} AND "tenantId"=${input.tenantId} FOR UPDATE`
     const doc=await tx.warehouseDoc.findFirst({where:{id:input.docId,tenantId:input.tenantId}})
     if(!doc)throw docError('单据不存在',404)
-    throw docError('复审后流程已结束，不支持取消复审',409)
+    if(doc.type!=='MANUAL_INBOUND')throw docError('仅入库单支持取消复审',409)
+    if(doc.status!=='CONFIRMED')throw docError('请先审核入库单',409)
+    if(doc.reviewStatus==='UNREVIEWED')return {doc,changed:false}
+    const updated=await tx.warehouseDoc.update({where:{id:doc.id},data:{reviewStatus:'UNREVIEWED'}})
+    await tx.warehouseDocLog.create({data:{tenantId:input.tenantId,docId:doc.id,action:'UNREVIEW',actorId:input.userId,actorName:await resolveActorName(tx,input.tenantId,input.userId)}})
+    return {doc:updated,changed:true}
   })
 }
 
-/** 供应链反审核：CONFIRMED → POSTED，必填退回原因；已复审的单据不能反审核。 */
-export async function unconfirmWarehouseDoc(input: { tenantId: string; userId: string; docId: string; reason: string }) {
-  const reason = String(input.reason || '').trim()
-  if (reason.length < 2 || reason.length > 240) throw docError('请填写退回原因（2至240个字符）', 400)
+/** 供应链反审核：CONFIRMED → POSTED；已复审须先取消复审。 */
+export async function unconfirmWarehouseDoc(input: { tenantId: string; userId: string; docId: string; reason?: string }) {
+  const reason = input.reason?.trim() || null
+  if (reason && reason.length > 240) throw docError('退回原因最多240个字符', 400)
   return serializableWithRetry(async tx => {
     await tx.$queryRaw`SELECT id FROM warehouse_docs WHERE id = ${input.docId} AND "tenantId" = ${input.tenantId} FOR UPDATE`
     const doc = await tx.warehouseDoc.findFirst({ where: { id: input.docId, tenantId: input.tenantId } })
     if (!doc) throw docError('单据不存在', 404)
     if (doc.status !== 'CONFIRMED') throw docError('只有已审核的单据才能反审核', 409)
-    if (doc.reviewStatus === 'REVIEWED') throw docError('该单据已复审，流程已结束，不能反审核', 409)
+    if (doc.reviewStatus === 'REVIEWED') throw docError('请先取消复审，再反审核', 409)
     const updated = await tx.warehouseDoc.update({
       where: { id: doc.id },
       data: {
@@ -348,6 +355,55 @@ export async function unconfirmWarehouseDoc(input: { tenantId: string; userId: s
     })
     return { doc: updated }
   })
+}
+
+/**
+ * 整单作废手工入库。
+ *
+ * 原单、原入库流水和批次始终保留；每一行追加反向流水。所有行与单据状态
+ * 在同一 Serializable 事务中提交，任一批次已消耗或余额不允许冲销时整单回滚。
+ */
+export async function voidWarehouseInboundDoc(input: { tenantId: string; userId: string; docId: string; reason: string }) {
+  const reason = String(input.reason || '').trim()
+  if (reason.length < 2 || reason.length > 240) throw docError('作废原因需为2至240个字符', 400)
+  return serializableWithRetry(async tx => {
+    await tx.$queryRaw`SELECT id FROM warehouse_docs WHERE id = ${input.docId} AND "tenantId" = ${input.tenantId} FOR UPDATE`
+    const doc = await tx.warehouseDoc.findFirst({
+      where: { id: input.docId, tenantId: input.tenantId },
+      include: { lines: { orderBy: { lineNo: 'asc' } } },
+    })
+    if (!doc) throw docError('单据不存在', 404)
+    if (doc.type !== 'MANUAL_INBOUND') throw docError('只有手工入库单可以整单作废', 409)
+    if (doc.status === 'VOIDED') return { doc, changed: false }
+    if (doc.reviewStatus === 'REVIEWED') throw docError('请先取消复审，再作废入库单', 409)
+    if (doc.status !== 'POSTED') throw docError('请先反审核，再作废入库单', 409)
+    if (!doc.lines.length || doc.lines.some(line => !line.movementId)) throw docError('入库单缺少完整过账流水，不能整单作废', 409)
+
+    for (const line of doc.lines) {
+      await reverseManualWarehouseInbound({
+        tenantId: input.tenantId,
+        warehouseId: doc.warehouseId,
+        userId: input.userId,
+        movementId: line.movementId!,
+        reason: `作废入库单 ${doc.docNo}：${reason}`.slice(0, 240),
+        idempotencyKey: `doc-void-${doc.id.slice(-36)}-${line.lineNo}`,
+        allowLinkedDocument: true,
+      }, tx)
+    }
+    const updated = await tx.warehouseDoc.update({ where: { id: doc.id }, data: { status: 'VOIDED' } })
+    await tx.warehouseDocLog.create({
+      data: {
+        tenantId: input.tenantId,
+        docId: doc.id,
+        action: 'VOID',
+        actorId: input.userId,
+        actorName: await resolveActorName(tx, input.tenantId, input.userId),
+        reason,
+        detail: { reversedLineCount: doc.lines.length } as Prisma.InputJsonValue,
+      },
+    })
+    return { doc: updated, changed: true }
+  }, 30_000)
 }
 
 export type WarehouseDocEditLine = {
@@ -517,6 +573,7 @@ export async function editWarehouseDoc(input: {
           movementId: movement.id,
           reason: `单据 ${doc.docNo} 改数量：${editReason}`,
           idempotencyKey: reversalKey,
+          allowLinkedDocument: true,
         }, tx)
         const repost = await recordBatchManualWarehouseInbound({
           warehouseId:doc.warehouseId,

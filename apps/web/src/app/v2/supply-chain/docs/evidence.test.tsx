@@ -32,6 +32,7 @@ afterEach(async () => {
 async function open(type: string, attachments: unknown[], options:Record<string,unknown>={}) {
   const doc = { id: 'doc', docNo: 'CK-TEST', type, status: 'POSTED', reviewStatus: 'UNREVIEWED', reason: '总仓自损：搬运损坏', attachmentCount: attachments.length, attachments, lines: [], logs: [], createdAt: '2026-10-10T00:00:00Z', effectiveAt: '2026-10-10', totalAmount: 4, ...options }
   fetch.mockImplementation(async (url: string) => {
+    if (url === '/api/warehouse-docs/doc/void') { Object.assign(doc,{status:'VOIDED'}); return {ok:true,changed:true,status:'VOIDED'} as any }
     if (url === '/api/warehouse-docs/doc/unreview') { Object.assign(doc,{reviewStatus:'UNREVIEWED'}); return {ok:true} as any }
     if (url === '/api/warehouse-docs/doc/review') { Object.assign(doc,{reviewStatus:'REVIEWED'}); return {ok:true} as any }
     if (url === '/api/warehouse-docs/doc') return doc as any
@@ -51,14 +52,26 @@ describe('warehouse document evidence', () => {
   it('shows the stored outbound evidence and its signed link after opening a document', async () => {
     const host = await open('MANUAL_OUTBOUND', [file])
     expect(host.textContent).toContain('现场证据（1份）')
-    expect(host.querySelector('a[href="http://127.0.0.1:4446/object?key=test"]')?.textContent).toContain('模拟现场.png')
+    expect(Array.from(host.querySelectorAll('button')).find(button=>button.textContent?.includes('模拟现场.png'))).toBeTruthy()
     expect(host.textContent).toContain('1 份')
     expect(fetch.mock.calls.every(([url]) => !String(url).includes('/confirm'))).toBe(true)
   })
   it('preserves inbound document attachments', async () => {
     const host = await open('MANUAL_INBOUND', [file])
     expect(host.textContent).toContain('供应商随货单据（1份）')
-    expect(host.querySelector('a[href="http://127.0.0.1:4446/object?key=test"]')).not.toBeNull()
+    expect(Array.from(host.querySelectorAll('button')).find(button=>button.textContent?.includes('模拟现场.png'))).toBeTruthy()
+  })
+  it('在页内预览图片和 PDF，并支持 Escape 关闭',async()=>{
+    const pdf={name:'送货单.pdf',mime:'application/pdf',size:2048,url:'https://signed.test/delivery.pdf'}
+    const host=await open('MANUAL_INBOUND',[file,pdf])
+    await act(async()=>Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find(button=>button.textContent?.includes('模拟现场.png'))!.click())
+    expect(host.querySelector('img[alt="模拟现场.png"]')?.getAttribute('src')).toBe(file.url)
+    await act(async()=>window.dispatchEvent(new KeyboardEvent('keydown',{key:'Escape'})))
+    expect(host.querySelector('[role="dialog"][aria-label="预览 模拟现场.png"]')).toBeNull()
+    await act(async()=>Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find(button=>button.textContent?.includes('送货单.pdf'))!.click())
+    expect(host.querySelector('iframe[title="PDF预览 送货单.pdf"]')?.getAttribute('src')).toBe(pdf.url)
+    await act(async()=>Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find(button=>button.textContent==='关闭预览')!.click())
+    expect(host.querySelector('[role="dialog"][aria-label="预览 送货单.pdf"]')).toBeNull()
   })
   it('leaves historical outbound documents without evidence readable', async () => {
     const host = await open('MANUAL_OUTBOUND', [])
@@ -73,14 +86,14 @@ describe('DEC034 supply-chain receipt review boundary',()=>{
   actor.role='FINANCE';const host=await open('MANUAL_INBOUND',[],{status:'CONFIRMED'})
   expect(Array.from(host.querySelectorAll('button')).some(b=>b.textContent==='复审'||b.textContent?.includes('反审核'))).toBe(false)
  })
- it('lets supply-chain review and then locks the confirmed receipt',async()=>{
+ it('lets supply-chain review and then cancel receipt review',async()=>{
   actor.role='SUPPLY_CHAIN';const host=await open('MANUAL_INBOUND',[],{status:'CONFIRMED'})
   const review=Array.from(host.querySelectorAll('button')).find(b=>b.textContent==='复审')!
   await act(async()=>review.click())
   const confirmation=Array.from(host.querySelectorAll('button')).find(b=>b.textContent==='确认复审')!
   await act(async()=>confirmation.click())
-  expect(host.textContent).toContain('已复审（锁定）')
-  expect(Array.from(host.querySelectorAll('button')).some(b=>b.textContent==='复审'||b.textContent?.includes('反审核'))).toBe(false)
+  expect(host.textContent).toContain('已复审')
+  expect(Array.from(host.querySelectorAll('button')).some(b=>b.textContent==='取消复审')).toBe(true)
  })
  it('keeps outbound documents outside this accountant receipt feature',async()=>{
   actor.role='FINANCE';const host=await open('MANUAL_OUTBOUND',[],{status:'CONFIRMED'})
@@ -88,9 +101,34 @@ describe('DEC034 supply-chain receipt review boundary',()=>{
  })
 })
 
- it('final reviewed document has no cancellation or reverse action',async()=>{
+describe('whole inbound document void',()=>{
+ it('requires a reason, preserves the document view, and removes all mutation actions after void',async()=>{
+  const host=await open('MANUAL_INBOUND',[],{status:'POSTED',reviewStatus:'UNREVIEWED'})
+  const button=(name:string)=>Array.from(host.querySelectorAll<HTMLButtonElement>('button')).find(item=>item.textContent===name)!
+  await act(async()=>button('整单作废').click())
+  expect(host.textContent).toContain('原入库单、采购订单、操作记录和库存流水都会保留')
+  expect(button('确认整单作废').disabled).toBe(true)
+  const reason=host.querySelector<HTMLTextAreaElement>('textarea')!
+  await act(async()=>{Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype,'value')!.set!.call(reason,'数量录入错误');reason.dispatchEvent(new Event('input',{bubbles:true}))})
+  await act(async()=>button('确认整单作废').click())
+  expect(fetch).toHaveBeenCalledWith('/api/warehouse-docs/doc/void',{method:'POST',body:JSON.stringify({reason:'数量录入错误'})})
+  expect(host.textContent).toContain('该入库单已整单作废')
+  expect(button('审核（锁定单据）')).toBeUndefined()
+  expect(button('整单作废')).toBeUndefined()
+ })
+ it('does not expose the void action to finance or outbound documents',async()=>{
+  actor.role='FINANCE';let host=await open('MANUAL_INBOUND',[],{status:'POSTED'})
+  expect(Array.from(host.querySelectorAll('button')).some(button=>button.textContent==='整单作废')).toBe(false)
+  await act(async()=>root!.unmount());root=undefined;document.body.replaceChildren();actor.role='SUPPLY_CHAIN'
+  host=await open('MANUAL_OUTBOUND',[],{status:'POSTED'})
+  expect(Array.from(host.querySelectorAll('button')).some(button=>button.textContent==='整单作废')).toBe(false)
+ })
+})
+
+ it('reviewed inbound shows cancel review before reverse audit',async()=>{
   const host=await open('MANUAL_INBOUND',[],{status:'CONFIRMED',reviewStatus:'REVIEWED'})
-  expect(Array.from(host.querySelectorAll('button')).some(button=>button.textContent==='取消复审'||button.textContent?.includes('反审核'))).toBe(false)
+  expect(Array.from(host.querySelectorAll('button')).some(button=>button.textContent==='取消复审')).toBe(true)
+  expect(Array.from(host.querySelectorAll('button')).some(button=>button.textContent?.includes('反审核'))).toBe(false)
   expect(fetch.mock.calls.filter(call=>call[1]?.method==='POST')).toHaveLength(0)
   expect(host.querySelector('thead')?.textContent).toContain('复审状态')
  })
@@ -103,7 +141,7 @@ const changeInput = async (input: HTMLInputElement, value: string) => {
 }
 
 describe('document edit safeguards', () => {
-  it('freezes stale approval after reverse409, preserves reason on failed reload, resumes only after latest GET', async () => {
+  it('freezes stale approval after direct reverse409 and resumes only after latest GET', async () => {
     const host = await open('MANUAL_INBOUND', [], { status: 'CONFIRMED' })
     const previous = fetch.getMockImplementation()!
     let conflict = false, failRead = true
@@ -118,22 +156,18 @@ describe('document edit safeguards', () => {
     const editor = host.querySelector('.max-w-4xl')!
     const find = (name: string) => [...editor.querySelectorAll('button')].find(b => b.textContent === name)!
     await act(async () => find('反审核（退回仓库修改）').click())
-    const reason = host.querySelector('input[placeholder="退回原因（必填，仓库人员会看到）"]') as HTMLInputElement
-    await changeInput(reason, '必须保留的退回原因')
-    await act(async () => find('确认退回').click())
+    expect(host.querySelector('input[placeholder^="退回原因"]')).toBeNull()
     expect(host.textContent).toContain('请先加载最新单据状态')
-    expect(find('确认退回').disabled).toBe(true)
+    expect(find('反审核（退回仓库修改）').disabled).toBe(true)
     expect(find('复审').disabled).toBe(true)
-    expect(reason.value).toBe('必须保留的退回原因')
-    await act(async () => find('确认退回').click())
+    await act(async () => find('反审核（退回仓库修改）').click())
     expect(fetch.mock.calls.filter(call => String(call[0]).endsWith('/unconfirm'))).toHaveLength(1)
     await act(async () => find('加载最新单据状态').click())
     expect(host.textContent).toContain('最新状态读取失败')
-    expect(find('确认退回').disabled).toBe(true)
-    expect(reason.value).toBe('必须保留的退回原因')
+    expect(find('反审核（退回仓库修改）').disabled).toBe(true)
     failRead = false
     await act(async () => find('加载最新单据状态').click())
-    expect(find('确认退回')).toBeUndefined()
+    expect(find('反审核（退回仓库修改）')).toBeUndefined()
     expect(find('复审')).toBeUndefined()
     expect(find('审核（锁定单据）').disabled).toBe(false)
     expect(fetch.mock.calls.filter(call => call[1]?.method === 'POST')).toHaveLength(1)
@@ -316,14 +350,12 @@ describe('warehouse unknown write result', () => {
     }else if(action==='confirm')await act(async()=>find('审核（锁定单据）').click())
     else if(action==='unconfirm'){
       await act(async()=>find('反审核（退回仓库修改）').click())
-      await changeInput(host.querySelector('input[placeholder^="退回原因"]')!,'未知退回结果保留')
-      await act(async()=>find('确认退回').click())
     }else{
       await act(async()=>find('复审').click())
       await act(async()=>find('确认复审').click())
     }
     expect(find('加载最新单据状态')).toBeDefined()
-    const actionButton=find(action==='save'?'保存修改':action==='confirm'?'审核（锁定单据）':action==='unconfirm'?'确认退回':'复审')
+    const actionButton=find(action==='save'?'保存修改':action==='confirm'?'审核（锁定单据）':action==='unconfirm'?'反审核（退回仓库修改）':'复审')
     expect(actionButton.disabled).toBe(true)
     await act(async()=>actionButton.click())
     expect(fetch.mock.calls.filter(call=>['POST','PUT'].includes(call[1]?.method||''))).toHaveLength(1)
@@ -367,6 +399,59 @@ it('audit entry opens the full editor without a blocking confirmation or automat
  act(()=>{audit.click();audit.click()})
  expect(fetch.mock.calls.filter(([url])=>url==='/api/warehouse-docs/doc/confirm')).toHaveLength(1)
  await act(async()=>{doc.status='CONFIRMED';finish({ok:true})})
+})
+
+it('full-page footer replaces submit actions with the current review actions',async()=>{
+ const doc={id:'doc',docNo:'RK-FOOTER',type:'MANUAL_INBOUND',status:'POSTED',reviewStatus:'UNREVIEWED',postedAt:'2026-11-20T00:00:00Z',lines:[],logs:[],attachments:[],totalAmount:0,effectiveAt:'2026-11-20',createdAt:'2026-11-20'}
+ fetch.mockImplementation(async(url:string)=>{
+  if(url==='/api/warehouse-docs/doc')return {...doc} as any
+  if(url.startsWith('/api/suppliers'))return [] as any
+  if(url==='/api/warehouse-docs/doc/confirm'){doc.status='CONFIRMED';return {ok:true} as any}
+  if(url==='/api/warehouse-docs/doc/review'){doc.reviewStatus='REVIEWED';return {ok:true} as any}
+  if(url==='/api/warehouse-docs/doc/unreview'){doc.reviewStatus='UNREVIEWED';return {ok:true} as any}
+  if(url==='/api/warehouse-docs/doc/unconfirm'){doc.status='POSTED';return {ok:true} as any}
+  throw new Error('Unexpected '+url)
+ })
+ const host=document.createElement('div');document.body.append(host);root=createRoot(host)
+ await act(async()=>root!.render(<WarehouseDocumentEditor docId="doc" fullPage canAudit canReview canEdit onClose={()=>{}} onChanged={()=>{}}/>))
+ const labels=()=>Array.from(host.querySelectorAll('footer button')).map(button=>button.textContent)
+ const footer=(label:string)=>Array.from(host.querySelectorAll<HTMLButtonElement>('footer button')).find(button=>button.textContent===label)!
+ const dialog=(label:string)=>Array.from(host.querySelectorAll<HTMLButtonElement>('[role="dialog"] button')).find(button=>button.textContent===label)!
+ expect(labels()).toEqual(['取消','保存','审核','整单作废'])
+ await act(async()=>footer('审核').click())
+ expect(labels()).toEqual(['取消','反审核','复审'])
+ expect(Array.from(host.querySelectorAll('button')).filter(button=>!button.closest('footer')).some(button=>button.textContent==='复审'||button.textContent==='反审核')).toBe(false)
+ await act(async()=>footer('复审').click())
+ await act(async()=>dialog('确认复审').click())
+ expect(labels()).toEqual(['取消','取消复审'])
+ await act(async()=>footer('取消复审').click())
+ await act(async()=>dialog('确认取消复审').click())
+ expect(labels()).toEqual(['取消','反审核','复审'])
+ await act(async()=>footer('反审核').click())
+ expect(labels()).toEqual(['取消','保存','审核','整单作废'])
+ expect(host.querySelector('footer input[aria-label="退回原因"]')).toBeNull()
+ expect(fetch.mock.calls.filter(call=>String(call[0]).endsWith('/unconfirm'))).toHaveLength(1)
+ expect(fetch.mock.calls.find(call=>String(call[0]).endsWith('/unconfirm'))?.[1]?.body).toBe('{}')
+})
+
+it('full-page footer hides review actions for voided documents and keeps them for confirmed documents',async()=>{
+ let status:'VOIDED'|'CONFIRMED'='VOIDED'
+ const doc=()=>({id:'doc',docNo:'RK-FOOTER-VOID',type:'MANUAL_INBOUND',status,reviewStatus:'UNREVIEWED',postedAt:'2026-11-23T00:00:00Z',lines:[],logs:[],attachments:[],totalAmount:0,effectiveAt:'2026-11-23',createdAt:'2026-11-23'})
+ fetch.mockImplementation(async(url:string)=>{
+  if(url==='/api/warehouse-docs/doc')return doc() as any
+  if(url.startsWith('/api/suppliers'))return [] as any
+  throw new Error('Unexpected '+url)
+ })
+ const labels=(host:HTMLElement)=>Array.from(host.querySelectorAll('footer button')).map(button=>button.textContent)
+
+ const voidedHost=document.createElement('div');document.body.append(voidedHost);root=createRoot(voidedHost)
+ await act(async()=>root!.render(<WarehouseDocumentEditor docId="doc" fullPage canAudit canReview canEdit onClose={()=>{}} onChanged={()=>{}}/>))
+ expect(labels(voidedHost)).toEqual(['取消'])
+
+ await act(async()=>root!.unmount());root=undefined;voidedHost.remove();status='CONFIRMED'
+ const confirmedHost=document.createElement('div');document.body.append(confirmedHost);root=createRoot(confirmedHost)
+ await act(async()=>root!.render(<WarehouseDocumentEditor docId="doc" fullPage canAudit canReview canEdit onClose={()=>{}} onChanged={()=>{}}/>))
+ expect(labels(confirmedHost)).toEqual(['取消','反审核','复审'])
 })
 
 describe('outbound quality compatibility',()=>{

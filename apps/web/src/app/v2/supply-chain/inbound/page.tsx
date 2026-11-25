@@ -38,7 +38,7 @@ type InboundRecord = {
   expiryDate: string | null
   reversed: boolean
   purchaseReceipt?: {id:string;no:string}|null
-  doc: { id: string; docNo: string; status: 'POSTED' | 'CONFIRMED' } | null
+  doc: { id: string; docNo: string; status: 'POSTED' | 'CONFIRMED' | 'VOIDED' } | null
 }
 
 type InboundResponse = {
@@ -353,9 +353,9 @@ export default function InboundRecordsPage() {
                       <a
                         href={`/v2/supply-chain/docs?doc=${row.doc.id}`}
                         className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-micro ${row.doc.status === 'POSTED' ? 'border-amber bg-amber-50 text-amber-fg hover:bg-amber-100' : 'border-border bg-bg text-gray2 hover:border-accent'}`}
-                        title={row.doc.status === 'POSTED' ? '未审核，可点击改单' : '已审核，点击查看'}
+                        title={row.doc.status === 'POSTED' ? '未审核，可点击改单' : row.doc.status === 'VOIDED' ? '已作废，点击查看原单' : '已审核，点击查看'}
                       >
-                        {row.doc.status === 'POSTED' ? `✏️ 改单 ${row.doc.docNo}` : `✓ ${row.doc.docNo}`}
+                        {row.doc.status === 'POSTED' ? `✏️ 改单 ${row.doc.docNo}` : row.doc.status === 'VOIDED' ? `已作废 ${row.doc.docNo}` : `✓ ${row.doc.docNo}`}
                       </a>
                     ) : row.purchaseReceipt ? <Link className="text-accent underline" href={`/v2/supply-chain/procurement/receipts/${encodeURIComponent(row.purchaseReceipt.id)}/edit`}>{row.purchaseReceipt.no}</Link> : <span className="text-gray3">—</span>}
                   </td>

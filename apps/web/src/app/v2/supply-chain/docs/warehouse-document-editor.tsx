@@ -20,8 +20,9 @@ type DocRow = {
   reason: string | null
   note: string | null
   effectiveAt: string
-  status: 'POSTED' | 'CONFIRMED'
+  status: 'POSTED' | 'CONFIRMED' | 'VOIDED'
   postingPolicy?: 'LEGACY' | 'REVIEW'
+  postedAt?: string | null
   reviewStatus: 'UNREVIEWED' | 'REVIEWED'
   lineCount: number
   totalAmount: number
@@ -57,7 +58,7 @@ type DocLine = {
 
 type DocLog = {
   id: string
-  action: 'CREATE' | 'CONFIRM' | 'UNCONFIRM' | 'EDIT' | 'REVIEW' | 'UNREVIEW'
+  action: 'CREATE' | 'CONFIRM' | 'UNCONFIRM' | 'EDIT' | 'REVIEW' | 'UNREVIEW' | 'VOID'
   actorName: string | null
   reason: string | null
   detail: any
@@ -72,6 +73,7 @@ type NewAttachment = DocAttachment & { key: string }
 type SupplierOption = { id: string; name: string; no?: string }
 
 const LOG_ACTION_LABEL: Record<DocLog['action'], string> = {
+  VOID: '作废',
   REVIEW: '复审',
   UNREVIEW: '取消复审',
   CREATE: '制单',
@@ -99,6 +101,9 @@ function fmtDay(value: string | null | undefined) {
 }
 
 function StatusBadge({ status }: { status: DocRow['status'] }) {
+  if (status === 'VOIDED') {
+    return <span className="rounded-full bg-red-50 px-2 py-0.5 text-caption text-red-700">已作废</span>
+  }
   if (status === 'CONFIRMED') {
     return <span className="rounded-full bg-emerald-50 px-2 py-0.5 text-caption text-emerald-700">已审核</span>
   }
@@ -106,7 +111,7 @@ function StatusBadge({ status }: { status: DocRow['status'] }) {
 }
 
 // ── 单据详情 / 改单 / 审核 ─────────────────────────────
-export type WarehouseDocumentAction = 'audit' | 'unconfirm' | 'review' | 'print' | 'quality'
+export type WarehouseDocumentAction = 'audit' | 'unconfirm' | 'review' | 'unreview' | 'void' | 'print' | 'quality'
 
 export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, onClose, onChanged, fullPage = false, initialAction, onCreated, newType = 'MANUAL_INBOUND' }: {
   fullPage?: boolean
@@ -127,11 +132,12 @@ export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, o
   const [outboundResponsibility,setOutboundResponsibility] = useState('')
   const [outboundSource,setOutboundSource] = useState('')
   const [candidates, setCandidates] = useState<Candidate[]>([])
-  const [selectedProduct, setSelectedProduct] = useState('')
+  const [selectedProductIds, setSelectedProductIds] = useState<string[]>([])
   const [candidateQuery,setCandidateQuery]=useState(''),[candidateAppliedQuery,setCandidateAppliedQuery]=useState(''),[candidateCursor,setCandidateCursor]=useState<string|null>(null),[candidateBusy,setCandidateBusy]=useState(false)
   const candidateSequence=useRef(0)
   useEffect(()=>()=>{candidateSequence.current++},[])
   const [newAttachments, setNewAttachments] = useState<NewAttachment[]>([])
+  const [previewAttachment, setPreviewAttachment] = useState<DocAttachment | null>(null)
   const [submissionUnknown, setSubmissionUnknown] = useState(false)
   const pendingSubmission = useRef<{ id: string; version: number; auditOnSubmit: boolean } | null>(null)
   const [doc, setDoc] = useState<DocDetail | null>(null)
@@ -173,8 +179,6 @@ export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, o
   const [lineEdits, setLineEdits] = useState<Record<string, { amount?: string; quantity?: string; note?: string }>>({})
   const [supplierId, setSupplierId] = useState('')
   const [headerNote, setHeaderNote] = useState('')
-  const [unauditReason, setUnauditReason] = useState('')
-  const [unauditOpen, setUnauditOpen] = useState(false)
   const [confirmation, openConfirmation] = useConfirmSheet()
   const editorInputs = useRef({ doc, supplierId, headerNote, lineEdits, editReason })
   editorInputs.current = { doc, supplierId, headerNote, lineEdits, editReason }
@@ -198,7 +202,7 @@ export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, o
         setCandidates(options.items || []);setCandidateCursor(options.nextCursor||null)
         setDoc({ id: '', docNo: '提交后生成', type: newType, supplierId: null, supplierName: null, reason: null, note: null,
           effectiveAt: now, status: 'POSTED', reviewStatus: 'UNREVIEWED', lineCount: 0, totalAmount: 0, createdAt: now,
-          confirmedAt: null, unauditedAt: null, unauditReason: null, attachmentCount: 0, attachments: [], lines: [], logs: [], warehouse: inventory.warehouse, organizationName })
+          confirmedAt: null, unauditedAt: null, unauditReason: null, postedAt: null, attachmentCount: 0, attachments: [], lines: [], logs: [], warehouse: inventory.warehouse, organizationName })
       }).catch(reason => { if (isCurrent()) setError(String(reason?.message || reason)) }).finally(() => { if (isCurrent()) setLoading(false) })
     }
     return apiFetch<DocDetail>(`/api/warehouse-docs/${docId}`)
@@ -208,7 +212,6 @@ export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, o
         setDoc(data)
         documentStateUnverifiedRef.current = false
         setDocumentStateUnverified(false)
-        setUnauditOpen(false)
         const previous = options?.preserveInputs ? editorInputs.current : null
         setSupplierId(previous && previous.supplierId !== (previous.doc?.supplierId || '') ? previous.supplierId : data.supplierId || '')
         setHeaderNote(previous && previous.headerNote !== (previous.doc?.note || '') ? previous.headerNote : data.note || '')
@@ -230,7 +233,7 @@ export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, o
   }, [docId, creating, canEdit, newType])
 
   useEffect(() => {
-    confirmation.close(); setUnauditOpen(false); setUnauditReason('')
+    confirmation.close()
     busyRef.current = false; setBusy(false)
     if (!creating) markDocumentStateUnverified()
   }, [docId])
@@ -252,7 +255,7 @@ export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, o
       const result=await apiFetch<{items:Candidate[];nextCursor?:string|null}>(`/api/warehouse-inventory/inbound-candidates?${query}`)
       if(sequence!==candidateSequence.current)return
       setCandidates(current=>more?[...new Map([...current,...result.items].map(row=>[row.id,row])).values()]:result.items)
-      setCandidateCursor(result.nextCursor||null);if(!more)setCandidateAppliedQuery(candidateQuery);setSelectedProduct('')
+      setCandidateCursor(result.nextCursor||null);if(!more){setCandidateAppliedQuery(candidateQuery);setSelectedProductIds([])}
     }catch(reason:any){if(sequence===candidateSequence.current)setError(reason.message||'物品查询失败')}
     finally{if(sequence===candidateSequence.current)setCandidateBusy(false)}
   }
@@ -358,7 +361,7 @@ export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, o
     } finally { busyRef.current = false; setBusy(false) }
   }
   function requestNewSubmit(audit: boolean) {
-    openConfirmation({ title: audit ? '审核新单据' : '提交单据', body: audit ? `保存当前草稿并生成${creatingOutbound ? '出库' : '入库'}单，审核标记为已审核。审核不改变库存和金额，复审后才生效。` : `保存当前草稿并生成待审核${creatingOutbound ? '出库' : '入库'}单。`, confirmLabel: audit ? '确认审核' : '确认提交', layerClassName: 'z-[100]', onConfirm: () => submitNew(audit) })
+    openConfirmation({ title: audit ? '审核新单据' : '提交单据', body: creatingOutbound ? (audit ? '保存并审核出库单；复审后才扣减库存。' : '保存并提交待审核出库单；复审后才扣减库存。') : (audit ? '保存并提交入库单，库存和金额立即入账，同时标记为已审核。' : '保存并提交待审核入库单，库存和金额立即入账。'), confirmLabel: audit ? '确认审核' : '确认提交', layerClassName: 'z-[100]', desktopDialog: true, onConfirm: () => submitNew(audit) })
   }
   async function uploadNewAttachments(files: File[]) {
     if (busyRef.current || submissionUnknown) return
@@ -376,18 +379,27 @@ export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, o
     } catch (reason: any) { setError(`部分附件上传未成功，已成功附件保留：${reason?.message || reason}`) }
     finally { busyRef.current = false; setBusy(false) }
   }
-  function addProduct() {
+  function addProducts() {
     if (!doc || busyRef.current || submissionUnknown) return
-    const product = candidates.find(candidate => candidate.id === selectedProduct)
-    if (!product || doc.lines.some(line => line.productId === product.id)) return
-    if (doc.lines.length >= 200) { setError('单张入库单最多200种商品'); return }
-    setDoc({ ...doc, lines: [...doc.lines, { id: product.id, lineNo: doc.lines.length + 1, productId: product.id,
+    const existing = new Set(doc.lines.map(line => line.productId))
+    const products = candidates.filter(product => selectedProductIds.includes(product.id) && product.eligible !== false && !existing.has(product.id))
+    if (!products.length) return
+    if (doc.lines.length + products.length > 200) { setError(`单张入库单最多200种商品，当前还可添加${200 - doc.lines.length}种`); return }
+    const added = products.map((product, index) => ({ id: product.id, lineNo: doc.lines.length + index + 1, productId: product.id,
       productName: product.name, productCode: product.code, productSpec: product.spec || null, productCategory: product.category || null,
       quantity: 1, unit: creatingOutbound ? product.inventoryUnit : product.purchaseUnit, unitPrice: null, amount: 0, inventoryQuantity: creatingOutbound ? 1 : product.purchaseToInventoryFactor,
-      inventoryUnit: product.inventoryUnit, note: null, batchNo: null, manufactureDate: null, expiryDate: null }] })
-    setLineEdits(current => ({ ...current, [product.id]: { quantity: '', amount: '' } }))
-    setSelectedProduct('')
+      inventoryUnit: product.inventoryUnit, note: null, batchNo: null, manufactureDate: null, expiryDate: null }))
+    setDoc({ ...doc, lines: [...doc.lines, ...added] })
+    setLineEdits(current => Object.fromEntries([...Object.entries(current), ...products.map(product => [product.id, { quantity: '', amount: '' }])]))
+    setSelectedProductIds([])
   }
+
+  useEffect(() => {
+    if (!previewAttachment) return
+    const close = (event: KeyboardEvent) => { if (event.key === 'Escape') setPreviewAttachment(null) }
+    window.addEventListener('keydown', close)
+    return () => window.removeEventListener('keydown', close)
+  }, [previewAttachment])
 
   const dirty = Boolean(doc && (supplierId !== (doc.supplierId || '') || headerNote !== (doc.note || '') ||
     Object.entries(lineEdits).some(([id, edit]) => {
@@ -437,11 +449,13 @@ export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, o
     if (startedAction.current === key) return
     startedAction.current = key
     // Opening the audit page only displays the document; the footer audit button performs the action.
-    if (initialAction === 'unconfirm' && canAudit && doc.status === 'CONFIRMED' && doc.reviewStatus !== 'REVIEWED') setUnauditOpen(true)
+    if (initialAction === 'unconfirm' && canAudit && doc.status === 'CONFIRMED' && doc.reviewStatus !== 'REVIEWED') void unconfirm()
     else if (initialAction === 'review' && canReview && doc.status === 'CONFIRMED' && doc.reviewStatus !== 'REVIEWED') review()
+    else if (initialAction === 'unreview' && canReview && doc.status === 'CONFIRMED' && doc.reviewStatus === 'REVIEWED' && doc.type === 'MANUAL_INBOUND') unreview()
+    else if (initialAction === 'void' && canReview && doc.status === 'POSTED' && doc.reviewStatus === 'UNREVIEWED' && doc.type === 'MANUAL_INBOUND') voidInboundDoc()
     else if (initialAction === 'print') showTableReport({
       title: `${doc.type === 'MANUAL_INBOUND' ? '入库单' : '出库单'} ${doc.docNo}`,
-      subtitle: `日期：${fmtDay(doc.effectiveAt)}；${doc.supplierName || doc.reason || ''}；状态：${doc.status === 'CONFIRMED' ? '已审核' : '待审核'}`,
+      subtitle: `日期：${fmtDay(doc.effectiveAt)}；${doc.supplierName || doc.reason || ''}；状态：${doc.status === 'CONFIRMED' ? '已审核' : doc.status === 'VOIDED' ? '已作废' : '待审核'}`,
       headers: ['序号','物品编码','物品名称','规格型号','物品类别','仓库','数量','单位','单价','金额','是否赠品','辅助单位','辅助数量','批次号','生产日期','到期日期','备注'],
       rows: doc.lines.map(line => [line.lineNo,line.productCode,line.productName,line.productSpec,line.productCategory,doc.warehouse?.name,line.quantity,line.unit,line.unitPrice,line.amount,line.isGift === true ? '是' : '否',line.inventoryUnit,line.inventoryQuantity,line.batchNo,fmtDay(line.manufactureDate),fmtDay(line.expiryDate),line.note]),
     })
@@ -534,7 +548,8 @@ export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, o
     const scope = { ...documentScope.current }
     openConfirmation({
       title: '复审',
-      body: doc.postingPolicy==='REVIEW'?'复审后才改变库存和金额，流程结束，不能取消复审或反审核。':'确认复审该历史单据？原有库存和金额不重复记账，复审后流程结束，不能取消复审或反审核。',
+      desktopDialog: true,
+      body: inbound ? (doc.postedAt ? '入库已在提交时计入库存，复审只确认单据；有问题可取消复审后反审核修改。' : '该历史入库单尚未过账，复审后才计入库存；有问题可取消复审后反审核修改。') : '复审后才改变库存和金额。',
       confirmLabel: '确认复审',
       layerClassName: 'z-[100]',
       onConfirm: async () => {
@@ -549,6 +564,64 @@ export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, o
           await load()
         } catch (reason: any) { if (!isDocumentScopeCurrent(scope)) return; throw new Error(handleDocumentWriteFailure(reason)) }
         finally { if (isDocumentScopeCurrent(scope)) { busyRef.current = false; setBusy(false) } }
+      },
+    })
+  }
+
+  function unreview() {
+    if (!doc || busyRef.current || documentStateUnverifiedRef.current || doc.id !== documentScope.current.id) return
+    const scope = { ...documentScope.current }
+    openConfirmation({
+      title: '取消复审',
+      desktopDialog: true,
+      body: '取消复审只退回核对状态，已入库的库存和金额保持不变。需要修改时再反审核。',
+      confirmLabel: '确认取消复审',
+      layerClassName: 'z-[100]',
+      onConfirm: async () => {
+        if (!isDocumentScopeCurrent(scope) || documentStateUnverifiedRef.current || busyRef.current) return
+        busyRef.current = true; setBusy(true); setError(null)
+        try {
+          await apiFetch(`/api/warehouse-docs/${doc.id}/unreview`, { method: 'POST', body: '{}' })
+          if (!isDocumentScopeCurrent(scope)) return
+          markDocumentStateUnverified()
+          onChanged(`单据 ${doc.docNo} 已取消复审`)
+          await load()
+        } catch (reason: any) { if (!isDocumentScopeCurrent(scope)) return; throw new Error(handleDocumentWriteFailure(reason)) }
+        finally { if (isDocumentScopeCurrent(scope)) { busyRef.current = false; setBusy(false) } }
+      },
+    })
+  }
+
+  function voidInboundDoc() {
+    if (!doc || doc.type !== 'MANUAL_INBOUND' || doc.status !== 'POSTED' || doc.reviewStatus === 'REVIEWED' || busyRef.current || documentStateUnverifiedRef.current || doc.id !== documentScope.current.id) return
+    const scope = { ...documentScope.current }
+    openConfirmation({
+      title: `作废入库单 ${doc.docNo}`,
+      desktopDialog: true,
+      body: '原入库单、采购订单、操作记录和库存流水都会保留；系统会为全部商品追加反向流水。任一批次已被使用时，整单不会作废。',
+      confirmLabel: '确认整单作废',
+      tone: 'danger',
+      withInput: true,
+      inputRequired: true,
+      inputPlaceholder: '请输入作废原因（2—240个字）',
+      layerClassName: 'z-[100]',
+      onConfirm: async inputReason => {
+        const reason = inputReason?.trim() || ''
+        if (reason.length < 2 || reason.length > 240) throw new Error('作废原因需填写2—240个字')
+        if (!isDocumentScopeCurrent(scope) || documentStateUnverifiedRef.current || busyRef.current) return
+        busyRef.current = true; setBusy(true); setError(null)
+        try {
+          await apiFetch(`/api/warehouse-docs/${doc.id}/void`, { method: 'POST', body: JSON.stringify({ reason }) })
+          if (!isDocumentScopeCurrent(scope)) return
+          markDocumentStateUnverified()
+          onChanged(`入库单 ${doc.docNo} 已作废；原单和冲销流水已保留`)
+          await load()
+        } catch (reasonValue: any) {
+          if (!isDocumentScopeCurrent(scope)) return
+          throw new Error(handleDocumentWriteFailure(reasonValue))
+        } finally {
+          if (isDocumentScopeCurrent(scope)) { busyRef.current = false; setBusy(false) }
+        }
       },
     })
   }
@@ -579,7 +652,6 @@ export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, o
 
   async function unconfirm() {
     if (!doc || busyRef.current || documentStateUnverifiedRef.current || doc.id !== documentScope.current.id) return
-    if (unauditReason.trim().length < 2) { setError('请填写退回原因'); return }
     const scope = { ...documentScope.current }
     busyRef.current = true
     setBusy(true)
@@ -587,12 +659,11 @@ export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, o
     try {
       await apiFetch(`/api/warehouse-docs/${doc.id}/unconfirm`, {
         method: 'POST',
-        body: JSON.stringify({ reason: unauditReason.trim() }),
+        body: '{}',
       })
       if (!isDocumentScopeCurrent(scope)) return
       markDocumentStateUnverified()
       onChanged(`单据 ${doc.docNo} 已退回，仓库可修改`)
-      setUnauditOpen(false)
       await load()
     } catch (reason: any) {
       if (!isDocumentScopeCurrent(scope)) return
@@ -629,11 +700,12 @@ export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, o
           <button disabled={busy || confirmation.open} onClick={() => protectClose()} className="rounded-cta border border-border px-3 py-1.5 text-button text-gray2">{fullPage ? '返回列表' : '关闭'}</button>
         </div>
 
-        {doc.unauditReason && doc.status === 'POSTED' && (
+        {doc.unauditedAt && doc.status === 'POSTED' && (
           <div className="mb-3 rounded-card border border-amber-200 bg-amber-50 px-4 py-2 text-body text-amber-fg">
-            已退回：{doc.unauditReason}（{fmtTime(doc.unauditedAt)}）—— 修改后重新审核
+            已反审核{doc.unauditReason ? `：${doc.unauditReason}` : ''}（{fmtTime(doc.unauditedAt)}）—— 修改后重新审核
           </div>
         )}
+        {doc.status === 'VOIDED' && <div className="mb-3 rounded-card border border-red-200 bg-red-50 px-4 py-2 text-body text-red-700">该入库单已整单作废。原单、审计记录与库存冲销流水均已保留，不能再次审核或修改。</div>}
         {error && <div role="alert" className="mb-3 rounded-card border border-red-200 bg-red-50 px-4 py-2 text-body text-red-600">{error}</div>}
 
         {documentStateUnverified && <div className="mb-3"><p role="status">本页审批状态尚未核对，请先加载最新状态；本页输入已保留。</p><button disabled={busy || loading} onClick={() => void load({ preserveInputs: true })}>加载最新单据状态</button></div>}
@@ -678,14 +750,14 @@ export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, o
             {creating && <label className="block text-accent">上传附件<input aria-label="上传随货附件" type="file" multiple accept="image/jpeg,image/png,image/webp,image/gif,application/pdf" disabled={busy || submissionUnknown ||(creating&&(newDraft.reconfirmPending||Boolean(newDraft.terminalStatus)))} onChange={event => { const files = Array.from(event.target.files || []); event.target.value = ''; void uploadNewAttachments(files) }} /></label>}
             <div>{inbound ? '供应商随货单据' : '现场证据'}（{doc.attachments?.length || 0}份）</div>
             {doc.attachments?.length ? <div className="flex flex-wrap gap-2">{doc.attachments.map((item, index) => (
-              <a key={`${item.name}-${index}`} href={item.url} target="_blank" rel="noreferrer" className="rounded-cta border border-border bg-bg px-3 py-2 text-caption text-accent hover:underline">
+              <button type="button" key={`${item.name}-${index}`} onClick={() => setPreviewAttachment(item)} className="rounded-cta border border-border bg-bg px-3 py-2 text-caption text-accent hover:underline">
                 {item.name} · {(item.size / 1024 / 1024).toFixed(1)}MB
-              </a>
+              </button>
             ))}</div> : <div className="text-body text-gray3">未上传</div>}
           </div>
         </div>
 
-        {creating && <div className={sheet.toolbar}><input aria-label="查询可用物品" placeholder="名称 / 编码 / 规格" maxLength={100} value={candidateQuery} disabled={busy||submissionUnknown||candidateBusy || (creating&&(newDraft.reconfirmPending||Boolean(newDraft.terminalStatus)))} onChange={event=>setCandidateQuery(event.target.value)}/><button disabled={busy||submissionUnknown||candidateBusy || (creating&&(newDraft.reconfirmPending||Boolean(newDraft.terminalStatus)))} onClick={()=>void loadCandidates()}>查询物品</button>{candidateCursor&&<button disabled={busy||submissionUnknown||candidateBusy || (creating&&(newDraft.reconfirmPending||Boolean(newDraft.terminalStatus)))} onClick={()=>void loadCandidates(true)}>加载更多物品</button>}<button disabled={busy||submissionUnknown||Boolean(newDraft.terminalStatus)} onClick={reconfirmDraft} className="rounded-cta border border-border px-3">{newDraft.reconfirmPending?'核对原请求':'重新核对仓库与单位'}</button><select aria-label={inbound ? "添加入库物品" : "添加出库物品"} value={selectedProduct} disabled={busy || submissionUnknown ||(creating&&(newDraft.reconfirmPending||Boolean(newDraft.terminalStatus)))} onChange={event => setSelectedProduct(event.target.value)} className="h-9 min-w-64 border border-border px-2"><option value="">选择物品</option>{candidates.filter(product => product.eligible!==false&&!doc.lines.some(line => line.productId === product.id)).map(product => <option key={product.id} value={product.id}>{product.code} {product.name}</option>)}</select><button disabled={busy || submissionUnknown || !selectedProduct || (creating&&(newDraft.reconfirmPending||Boolean(newDraft.terminalStatus)))} onClick={addProduct} className="rounded-cta border border-border px-3">添加物品</button></div>}
+        {creating && <div className={sheet.toolbar}><input aria-label="查询可用物品" placeholder="名称 / 编码 / 规格" maxLength={100} value={candidateQuery} disabled={busy||submissionUnknown||candidateBusy || (creating&&(newDraft.reconfirmPending||Boolean(newDraft.terminalStatus)))} onChange={event=>setCandidateQuery(event.target.value)}/><button disabled={busy||submissionUnknown||candidateBusy || (creating&&(newDraft.reconfirmPending||Boolean(newDraft.terminalStatus)))} onClick={()=>void loadCandidates()}>查询物品</button>{candidateCursor&&<button disabled={busy||submissionUnknown||candidateBusy || (creating&&(newDraft.reconfirmPending||Boolean(newDraft.terminalStatus)))} onClick={()=>void loadCandidates(true)}>加载更多物品</button>}<button disabled={busy||submissionUnknown||Boolean(newDraft.terminalStatus)} onClick={reconfirmDraft} className="rounded-cta border border-border px-3">{newDraft.reconfirmPending?'核对原请求':'重新核对仓库与单位'}</button><div className="max-h-40 min-w-72 overflow-auto rounded-cta border border-border bg-white p-2" aria-label={inbound ? "入库物品候选" : "出库物品候选"}>{candidates.filter(product => product.eligible!==false&&!doc.lines.some(line => line.productId === product.id)).map(product => <label key={product.id} className="flex gap-2 py-1"><input type="checkbox" aria-label={`选择${product.name}`} checked={selectedProductIds.includes(product.id)} disabled={busy||submissionUnknown} onChange={event=>setSelectedProductIds(current=>event.target.checked?[...new Set([...current,product.id])]:current.filter(id=>id!==product.id))}/><span>{product.code} {product.name}</span></label>)}</div><button type="button" disabled={busy||submissionUnknown||!candidates.some(product=>product.eligible!==false&&!doc.lines.some(line=>line.productId===product.id))} onClick={()=>setSelectedProductIds(candidates.filter(product=>product.eligible!==false&&!doc.lines.some(line=>line.productId===product.id)).map(product=>product.id))}>全选当前候选</button><button disabled={busy || submissionUnknown || !selectedProductIds.length || (creating&&(newDraft.reconfirmPending||Boolean(newDraft.terminalStatus)))} onClick={addProducts} className="rounded-cta border border-border px-3">添加已选（{selectedProductIds.length}）</button></div>}
         {/* 行明细 */}
         <div className={`${sheet.tableWrap} ${sheet.frozenIdentity}`}><table data-row-actions={creating} className="mb-4 w-full min-w-[1400px] text-body">
           <thead>
@@ -790,7 +862,7 @@ export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, o
         {editable && !creating && (
           <div className="mb-4 space-y-2 rounded-card border border-border p-4">
             <p className="text-caption text-gray2">
-              {doc.postingPolicy==='REVIEW'?'当前单据尚未生效；保存仅更新单据，审核只改状态，复审后才改变库存和金额。':<>可改：金额/单价、{inbound ? '数量（批次未被消耗时）、供应商、' : ''}备注。保存后同步原有库存数量和金额，并保留历史。出库单数量不能改（数量差错请走实盘/报损）。</>}
+              {doc.postingPolicy==='REVIEW' && !doc.postedAt ? '当前单据尚未入账；保存只更新单据。' : <>可改：金额/单价、{inbound ? '数量（批次未被消耗时）、供应商、' : ''}备注。保存后同步库存台账，并保留历史。出库单数量不能改（数量差错请走实盘/报损）。</>}
             </p>
             <div className="flex flex-wrap items-center gap-2">
               <input
@@ -810,10 +882,11 @@ export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, o
         )}
 
         {/* 审核操作区 */}
-        <p className="mb-2 text-caption text-gray2">供应链复审：{doc.reviewStatus==='REVIEWED'?'已复审（锁定）':'未复审'}</p>
-        {doc.status==='CONFIRMED' && doc.reviewStatus!=='REVIEWED' && canReview && <button disabled={busy || loading || documentStateUnverified} onClick={()=>void review()} className="mb-3 h-9 rounded-cta bg-ink px-4 text-button text-white disabled:opacity-40">复审</button>}
+        <p className="mb-2 text-caption text-gray2">供应链复审：{doc.reviewStatus==='REVIEWED'?'已复审':'未复审'}</p>
+        {!fullPage && doc.status==='CONFIRMED' && doc.reviewStatus!=='REVIEWED' && canReview && <button disabled={busy || loading || documentStateUnverified} onClick={()=>void review()} className="mb-3 h-9 rounded-cta bg-ink px-4 text-button text-white disabled:opacity-40">复审</button>}
+        {!fullPage && inbound && doc.status==='CONFIRMED' && doc.reviewStatus==='REVIEWED' && canReview && <button disabled={busy || loading || documentStateUnverified} onClick={()=>void unreview()} className="mb-3 h-9 rounded-cta border border-border bg-white px-4 text-button disabled:opacity-40">取消复审</button>}
 
-        <div className="mb-4 flex flex-wrap items-center gap-2">
+        {!fullPage && <div className="mb-4 flex flex-wrap items-center gap-2">
           {!creating && !fullPage && doc.status === 'POSTED' && auditAllowed && (
             <button
               onClick={confirm}
@@ -821,39 +894,35 @@ export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, o
               className="h-9 rounded-cta bg-emerald-600 px-4 text-button text-white disabled:opacity-40"
             >{busy ? '处理中…' : '审核（锁定单据）'}</button>
           )}
-          {doc.status === 'CONFIRMED' && doc.reviewStatus !== 'REVIEWED' && auditAllowed && !unauditOpen && (
+          {doc.status === 'CONFIRMED' && doc.reviewStatus !== 'REVIEWED' && auditAllowed && (
             <button
-              onClick={() => setUnauditOpen(true)}
+              onClick={() => void unconfirm()}
               disabled={busy || loading || documentStateUnverified}
               className="h-9 rounded-cta border border-amber-300 bg-amber-50 px-4 text-button text-amber-fg disabled:opacity-40"
             >反审核（退回仓库修改）</button>
           )}
-          {unauditOpen && (
-            <div className="flex w-full flex-wrap items-center gap-2 rounded-card border border-amber-200 bg-amber-50 p-3">
-              <input
-                value={unauditReason}
-                onChange={event => setUnauditReason(event.target.value)}
-                placeholder="退回原因（必填，仓库人员会看到）"
-                className="h-9 min-w-64 flex-1 rounded-cta border border-border bg-white px-3 text-body"
-              />
-              <button
-                onClick={unconfirm}
-                disabled={busy || loading || documentStateUnverified}
-                className="h-9 rounded-cta bg-amber-600 px-4 text-button text-white disabled:opacity-40"
-              >确认退回</button>
-              <button onClick={() => setUnauditOpen(false)} className="h-9 rounded-cta border border-border bg-white px-3 text-button text-gray2">取消</button>
-            </div>
+          {inbound && doc.status === 'POSTED' && doc.reviewStatus === 'UNREVIEWED' && canReview && (
+            <button onClick={voidInboundDoc} disabled={busy || loading || documentStateUnverified} className="h-9 rounded-cta border border-red-300 bg-red-50 px-4 text-button text-red-700 disabled:opacity-40">整单作废</button>
           )}
           {!auditAllowed && (
             <span className="text-caption text-gray2">审核、反审核与复审由供应链操作</span>
           )}
-        </div>
+        </div>}
 
         {fullPage && <footer className={sheet.footer}>
-          <button disabled={busy || confirmation.open || submissionUnknown} onClick={() => protectClose()}>取消</button>
-          <button disabled={busy || loading || documentStateUnverified || submissionUnknown || (creating&&(newDraft.reconfirmPending||Boolean(newDraft.terminalStatus))) || !editable} onClick={() => void (creating ? saveNewDraft() : saveEdit())}>保存</button>
-          <button disabled={busy || loading || documentStateUnverified || submissionUnknown || (creating&&newDraft.reconfirmPending) || !editable || (creating && (!newDraft.ready||!newDraft.snapshot||doc.lines.some(line=>{const saved=newDraft.snapshot.products.find((row:any)=>row.id===line.productId);return !saved?.units||!saved.enabled||!saved.displayMatched||(!creatingOutbound&&!saved.units.structured?.purchase)})))} onClick={() => creating ? requestNewSubmit(false) : hasEdits() ? void saveEdit() : onChanged('当前单据已处于待审核状态')}>提交</button>
-          <button disabled={busy || loading || documentStateUnverified || submissionUnknown || (creating&&newDraft.reconfirmPending) || !auditAllowed || doc.status !== 'POSTED' || (creating && (!newDraft.ready||!newDraft.snapshot||doc.lines.some(line=>{const saved=newDraft.snapshot.products.find((row:any)=>row.id===line.productId);return !saved?.units||!saved.enabled||!saved.displayMatched||(!creatingOutbound&&!saved.units.structured?.purchase)})))} onClick={() => creating ? requestNewSubmit(true) : void confirm()}>审核</button>
+            <button disabled={busy || confirmation.open || submissionUnknown} onClick={() => protectClose()}>取消</button>
+            {creating ? <>
+              <button disabled={busy || loading || documentStateUnverified || submissionUnknown || newDraft.reconfirmPending || Boolean(newDraft.terminalStatus) || !editable} onClick={() => void saveNewDraft()}>保存</button>
+              <button disabled={busy || loading || documentStateUnverified || submissionUnknown || newDraft.reconfirmPending || !editable || !newDraft.ready || !newDraft.snapshot || doc.lines.some(line=>{const saved=newDraft.snapshot.products.find((row:any)=>row.id===line.productId);return !saved?.units||!saved.enabled||!saved.displayMatched||(!creatingOutbound&&!saved.units.structured?.purchase)})} onClick={() => requestNewSubmit(false)}>提交</button>
+              <button disabled={busy || loading || documentStateUnverified || submissionUnknown || newDraft.reconfirmPending || !auditAllowed || !newDraft.ready || !newDraft.snapshot || doc.lines.some(line=>{const saved=newDraft.snapshot.products.find((row:any)=>row.id===line.productId);return !saved?.units||!saved.enabled||!saved.displayMatched||(!creatingOutbound&&!saved.units.structured?.purchase)})} onClick={() => requestNewSubmit(true)}>审核</button>
+            </> : doc.status==='POSTED' ? <>
+              {editable && <button disabled={busy || loading || documentStateUnverified || submissionUnknown} onClick={() => void saveEdit()}>保存</button>}
+              {auditAllowed && <button disabled={busy || loading || documentStateUnverified || submissionUnknown} onClick={() => void confirm()}>审核</button>}
+              {inbound && canReview && <button disabled={busy || loading || documentStateUnverified || submissionUnknown} onClick={voidInboundDoc}>整单作废</button>}
+            </> : doc.status==='CONFIRMED' && doc.reviewStatus==='UNREVIEWED' ? <>
+              {auditAllowed && <button disabled={busy || loading || documentStateUnverified || submissionUnknown} onClick={() => void unconfirm()}>反审核</button>}
+              {canReview && <button disabled={busy || loading || documentStateUnverified || submissionUnknown} onClick={() => void review()}>复审</button>}
+            </> : doc.status==='CONFIRMED' && inbound && canReview ? <button disabled={busy || loading || documentStateUnverified || submissionUnknown} onClick={() => void unreview()}>取消复审</button> : null}
         </footer>}
 
         {/* 操作日志 */}
@@ -882,6 +951,7 @@ export function WarehouseDocumentEditor({ docId, canAudit, canEdit, canReview, o
           </ul>
         </details>
       </div>
+      {previewAttachment && <div role="dialog" aria-modal="true" aria-label={`预览 ${previewAttachment.name}`} className="fixed inset-0 z-[120] flex items-center justify-center bg-black/60 p-4" onClick={() => setPreviewAttachment(null)}><div className="flex h-[90vh] w-full max-w-5xl flex-col rounded-card bg-white p-3" onClick={event => event.stopPropagation()}><div className="mb-2 flex items-center justify-between"><strong>{previewAttachment.name}</strong><button type="button" autoFocus onClick={() => setPreviewAttachment(null)}>关闭预览</button></div>{previewAttachment.mime === 'application/pdf' ? <iframe title={`PDF预览 ${previewAttachment.name}`} src={previewAttachment.url} className="min-h-0 flex-1 border-0" /> : <img src={previewAttachment.url} alt={previewAttachment.name} className="min-h-0 flex-1 object-contain" />}</div></div>}
     </div>
   )
 }

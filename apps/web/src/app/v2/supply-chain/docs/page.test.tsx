@@ -165,9 +165,27 @@ describe('单据审核页面', () => {
     await waitFor(() => container.textContent?.includes('供应商送货单.pdf') ?? false)
     expect(container.textContent).toContain('供应商随货单据（1份）')
     expect(container.textContent).not.toContain('报损举证')
-    expect((container.querySelector('a[href="https://signed.test/delivery.pdf"]') as HTMLAnchorElement).target).toBe('_blank')
+    expect(Array.from(container.querySelectorAll('button')).find(button => button.textContent?.includes('供应商送货单.pdf'))).toBeTruthy()
+    expect(container.querySelector('a[href="https://signed.test/delivery.pdf"]')).toBeNull()
 
     act(() => root.unmount())
     container.remove()
+  })
+
+  it('将作废单据显示为已作废，且不再提供审核或保存操作', async () => {
+    const row = {
+      id: 'doc-void', docNo: 'RK-VOID-001', type: 'MANUAL_INBOUND', supplierId: 'sup-1', supplierName: '测试供应商',
+      reason: null, note: '录入错误', effectiveAt: '2026-11-23T02:00:00.000Z', status: 'VOIDED', reviewStatus: 'UNREVIEWED',
+      lineCount: 1, totalAmount: 720, createdAt: '2026-11-23T02:01:00.000Z', confirmedAt: null, unauditedAt: null, unauditReason: null, attachmentCount: 0,
+    }
+    mockFetch.mockImplementation(path => String(path).startsWith('/api/warehouse-docs?')
+      ? Promise.resolve({ items: [row], total: 1, page: 1, pageSize: 20 })
+      : Promise.reject(new Error(`unexpected API: ${String(path)}`)))
+    const { container, root } = renderPage()
+    await waitFor(() => container.textContent?.includes('RK-VOID-001') ?? false)
+    expect(container.textContent).toContain('已作废')
+    const rowElement = Array.from(container.querySelectorAll('tr')).find(item => item.textContent?.includes('RK-VOID-001'))!
+    expect(Array.from(rowElement.querySelectorAll('button,a')).some(item => ['审核','作废','保存','反审核','复审'].includes(item.textContent || '') && !(item as HTMLButtonElement).disabled)).toBe(false)
+    act(() => root.unmount()); container.remove()
   })
 })

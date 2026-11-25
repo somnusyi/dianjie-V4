@@ -9,8 +9,6 @@ import { financeReports } from '@/app/v2/supply-chain/finance-reports/report-def
 const warehouseTools = [
   { label: '库存查询与入库', href: '/v2/supply-chain/inventory' },
   { label: '总仓自损', href: '/v2/supply-chain/inventory/loss' },
-  { label: '入库记录', href: '/v2/supply-chain/inbound' },
-  { label: '单据审核', href: '/v2/supply-chain/docs' },
   { label: '总仓多人盘点作业', href: '/v2/supply-chain/stocktake/work' },
 ]
 

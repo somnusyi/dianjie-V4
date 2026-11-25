@@ -64,7 +64,7 @@ function buildTx(options: {
         return null
       }),
       aggregate: vi.fn().mockResolvedValue({
-        _sum: { inventoryQuantity: options.priorReversedQty ? new Prisma.Decimal(options.priorReversedQty) : null, valueDelta: null },
+        _sum: { inventoryQuantity: options.priorReversedQty ? new Prisma.Decimal(options.priorReversedQty) : null },
       }),
       create: movementCreate,
     },

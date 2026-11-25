@@ -2452,6 +2452,8 @@ export async function reverseManualWarehouseInbound(input: {
   movementId: string
   reason: string
   idempotencyKey: string
+  /** Only document-level atomic workflows may reverse a movement linked to a WarehouseDoc. */
+  allowLinkedDocument?: boolean
 }, transaction?: Prisma.TransactionClient) {
   const db = transaction ?? prisma
   const warehouseId = await resolveTenantWarehouseId(db, input.tenantId, input.warehouseId)
@@ -2486,6 +2488,7 @@ export async function reverseManualWarehouseInbound(input: {
       const doc = await tx.warehouseDoc.findFirst({ where: { id: linkedLine.docId, tenantId: input.tenantId } })
       if (doc?.reviewStatus === 'REVIEWED') throw businessError('已复审的入库不能冲销', 409)
       if (doc?.status === 'CONFIRMED') throw businessError('请先对入库单反审核，再冲销', 409)
+      if (!input.allowLinkedDocument) throw businessError('关联入库单不能单条冲销，请到入库单整单作废或修改', 409)
     }
     const balances = await lockBalances(tx, {
       tenantId: input.tenantId,

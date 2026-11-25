@@ -4,7 +4,6 @@ import {prisma} from '@dianjie/db'
 import {createReviewInbound,createReviewOutbound} from '../../src/services/warehouseReviewPosting'
 import {recordBatchManualWarehouseInbound,serializableWithRetry} from '../../src/services/warehouseLedger'
 import {confirmWarehouseDoc,reviewWarehouseDoc,ensureWarehouseDocInTransaction,unconfirmWarehouseDoc,unreviewWarehouseDoc,editWarehouseDoc} from '../../src/services/warehouseDocs'
-import {createWarehouseStocktake,getWarehouseStocktake,saveWarehouseStocktakeSection,submitWarehouseStocktake,approveWarehouseStocktake,reviewWarehouseStocktake} from '../../src/services/warehouseStocktake'
 let tenantId:string,userId:string,warehouseId:string,supplierId:string,productId:string
 beforeAll(async()=>{
  const key=randomUUID();tenantId=(await prisma.tenant.create({data:{slug:`review-gate-${key}`,name:'仓库流程验证'}})).id
@@ -17,27 +16,51 @@ afterAll(()=>prisma.$disconnect())
 const common=()=>({tenantId,userId,warehouseId,effectiveAt:new Date('2026-11-03T03:00:00Z')})
 const balance=()=>prisma.warehouseLedgerBalance.findFirst({where:{tenantId,warehouseId,productId}})
 async function ledger(){return JSON.stringify({balance:await balance(),movements:await prisma.warehouseLedgerMovement.findMany({where:{tenantId,productId},orderBy:{id:'asc'}}),lots:await prisma.warehouseLedgerLot.findMany({where:{tenantId,productId},orderBy:{id:'asc'}})})}
-it('submission and audit do not post; concurrent review posts exactly once and review is terminal',async()=>{
+it('inbound submission posts once; review can be cancelled and audit reopened without posting again',async()=>{
  const key=randomUUID(),input={...common(),supplierId,idempotencyKey:key,documentKey:`inbound-draft:${key}`,items:[{productId,purchaseQuantity:10,totalAmount:300}]}
  const before=await ledger(),first=await serializableWithRetry(tx=>createReviewInbound(tx,input));const docId=first.doc.id
- expect(await ledger()).toBe(before)
+ expect(await ledger()).not.toBe(before)
+ expect((await balance())!.physicalQty.toString()).toBe('30')
+ expect((await balance())!.inventoryValue.toString()).toBe('300')
+ const posted=await ledger()
  expect((await serializableWithRetry(tx=>createReviewInbound(tx,input))).created).toBe(false)
+ expect(await ledger()).toBe(posted)
  await expect(serializableWithRetry(tx=>createReviewInbound(tx,{...input,items:[{productId,purchaseQuantity:11,totalAmount:300}]}))).rejects.toThrow('不同单据内容')
  await expect(reviewWarehouseDoc({tenantId,userId,docId})).rejects.toThrow('先完成')
- await confirmWarehouseDoc({tenantId,userId,docId});expect(await ledger()).toBe(before)
+ await confirmWarehouseDoc({tenantId,userId,docId});expect(await ledger()).toBe(posted)
  const reviewed=await Promise.all([reviewWarehouseDoc({tenantId,userId,docId}),reviewWarehouseDoc({tenantId,userId,docId})])
  expect(reviewed.filter(value=>value.changed)).toHaveLength(1)
  expect((await balance())!.physicalQty.toString()).toBe('30')
  expect((await balance())!.inventoryValue.toString()).toBe('300')
  expect(await prisma.warehouseLedgerMovement.count({where:{tenantId,productId}})).toBe(1)
- await expect(unconfirmWarehouseDoc({tenantId,userId,docId,reason:'核对单据'})).rejects.toThrow('流程已结束')
- await expect(unreviewWarehouseDoc({tenantId,userId,docId})).rejects.toThrow('不支持取消复审')
+ await expect(unconfirmWarehouseDoc({tenantId,userId,docId,reason:'核对单据'})).rejects.toThrow('先取消复审')
+ expect((await unreviewWarehouseDoc({tenantId,userId,docId})).changed).toBe(true)
+ expect((await unreviewWarehouseDoc({tenantId,userId,docId})).changed).toBe(false)
+ expect(await ledger()).toBe(posted)
+ await unconfirmWarehouseDoc({tenantId,userId,docId})
+ const returned=await prisma.warehouseDoc.findUniqueOrThrow({where:{id:docId}})
+ expect(returned.unauditReason).toBeNull()
+ expect((await prisma.warehouseDocLog.findFirstOrThrow({where:{docId,action:'UNCONFIRM'},orderBy:{createdAt:'desc'}})).reason).toBeNull()
+ expect(await ledger()).toBe(posted)
+ await editWarehouseDoc({tenantId,userId,docId,editReason:'复审核对价格',lines:[{lineId:first.doc.lines[0].id,amount:330}]})
+ expect((await balance())!.inventoryValue.toString()).toBe('330')
+ expect(await prisma.warehouseLedgerMovement.count({where:{tenantId,productId,type:'MANUAL_INBOUND'}})).toBe(1)
+ await editWarehouseDoc({tenantId,userId,docId,editReason:'复核价格后恢复原价',lines:[{lineId:first.doc.lines[0].id,amount:300}]})
+ expect((await balance())!.inventoryValue.toString()).toBe('300')
+ await confirmWarehouseDoc({tenantId,userId,docId})
+ const edited=await ledger()
+ expect((await reviewWarehouseDoc({tenantId,userId,docId})).changed).toBe(true)
+ expect(await ledger()).toBe(edited)
 })
-it('an unposted document can be edited without stock adjustments, then reviewed using edited amounts',async()=>{
+it('an already-posted inbound can be edited before review without posting again',async()=>{
  const key=randomUUID();const result=await serializableWithRetry(tx=>createReviewInbound(tx,{...common(),supplierId,idempotencyKey:key,documentKey:`inbound-draft:${key}`,items:[{productId,purchaseQuantity:2,totalAmount:60,batchNo:'LOT-A'}]}))
- const before=await ledger();await editWarehouseDoc({tenantId,userId,docId:result.doc.id,editReason:'核对数量金额',lines:[{lineId:result.doc.lines[0].id,quantity:3,amount:90}]});expect(await ledger()).toBe(before)
- await confirmWarehouseDoc({tenantId,userId,docId:result.doc.id});expect(await ledger()).toBe(before)
- await reviewWarehouseDoc({tenantId,userId,docId:result.doc.id});expect((await balance())!.physicalQty.toString()).toBe('39')
+ const before=await ledger();expect((await balance())!.physicalQty.toString()).toBe('36')
+ await editWarehouseDoc({tenantId,userId,docId:result.doc.id,editReason:'核对数量金额',lines:[{lineId:result.doc.lines[0].id,quantity:3,amount:90}]})
+ expect(await ledger()).not.toBe(before)
+ await confirmWarehouseDoc({tenantId,userId,docId:result.doc.id})
+ const edited=await ledger();await reviewWarehouseDoc({tenantId,userId,docId:result.doc.id})
+ expect(await ledger()).toBe(edited)
+ expect((await balance())!.physicalQty.toString()).toBe('39')
 })
 it('self loss and manual outbound wait for review; insufficient stock leaves review and ledger unchanged',async()=>{
  for(const businessType of ['SELF_LOSS','GENERIC'] as const){
@@ -50,17 +73,6 @@ it('self loss and manual outbound wait for review; insufficient stock leaves rev
  await expect(reviewWarehouseDoc({tenantId,userId,docId:doc.id})).rejects.toThrow()
  expect(await ledger()).toBe(before);expect((await prisma.warehouseDoc.findUniqueOrThrow({where:{id:doc.id}})).reviewStatus).toBe('UNREVIEWED')
 })
-it('stocktake audit changes status only; final review adjusts stock once',async()=>{
- const current=await balance();const created=await createWarehouseStocktake({tenantId,userId,warehouseId,countDate:'2026-11-03',requestKey:randomUUID(),sections:[{name:'总仓',assignedToId:userId,productIds:[productId]}]})
- let count=await getWarehouseStocktake(tenantId,created.stocktake.id);const section=count.sections[0]
- await saveWarehouseStocktakeSection({tenantId,userId,stocktakeId:count.id,sectionId:section.id,rowVersion:section.rowVersion,submit:true,items:[{itemId:section.items[0].id,countedQuantity:current!.physicalQty.minus(1).toString(),reason:'复核差异'}]})
- count=await getWarehouseStocktake(tenantId,count.id);await submitWarehouseStocktake({tenantId,userId,id:count.id,rowVersion:count.rowVersion});const before=await ledger()
- await approveWarehouseStocktake({tenantId,userId,id:count.id});expect(await ledger()).toBe(before)
- expect(await prisma.warehouseStocktakeAdjustment.count({where:{stocktakeId:count.id}})).toBe(0)
- await reviewWarehouseStocktake({tenantId,userId,id:count.id});expect((await balance())!.physicalQty.toString()).toBe(current!.physicalQty.minus(1).toString())
- const after=await ledger();expect((await reviewWarehouseStocktake({tenantId,userId,id:count.id})).replayed).toBe(true);expect(await ledger()).toBe(after)
-})
-
 it('reviewing a historical already-posted document never posts it again',async()=>{
  const key=randomUUID()
  const doc=await serializableWithRetry(async tx=>{

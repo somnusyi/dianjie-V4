@@ -1,7 +1,7 @@
 /**
  * 供应商 App · 订单 Tab  PDF: supplier_order_list_and_detail
  * 接真实 GET /api/orders (后端按 supplierId 自动过滤)
- * 发货必须进入详情页逐项核对实发数量。
+ * 单张订单仍可进入详情逐项核对；列表批量发货只按原订货数量处理。
  */
 'use client'
 import { useEffect, useState } from 'react'
@@ -13,6 +13,7 @@ import {
   supplierOrderStatusMeta,
 } from '@/lib/supplier-domain'
 import dayjs from '@/lib/business-dayjs'
+import { clientRequestId } from '@/lib/client-id'
 import { SUPPLIER_DIFFERENCES_PATH, supplierOrdersLegacyDifferenceRedirect } from './legacy-difference-redirect'
 
 type Order = {
@@ -43,6 +44,7 @@ type Delivery = {
 
 type SearchCriteria = { keyword: string; dateFrom: string; dateTo: string }
 const EMPTY_SEARCH: SearchCriteria = { keyword: '', dateFrom: '', dateTo: '' }
+const SELECTED_ORDER_LIMIT = 100
 
 type LossClaim = {
   id: string; status: string; totalLossAmount: string
@@ -64,6 +66,9 @@ export default function SupplierOrdersPage() {
   const [error, setError] = useState<string | null>(null)
   const [loadingOrders, setLoadingOrders] = useState(false)
   const [loadingDeliveries, setLoadingDeliveries] = useState(false)
+  const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([])
+  const [batchBusy, setBatchBusy] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
   const [searchDraft, setSearchDraft] = useState<SearchCriteria>(EMPTY_SEARCH)
   const [appliedSearch, setAppliedSearch] = useState<SearchCriteria>(EMPTY_SEARCH)
   const legacyDifferenceRedirect = typeof window === 'undefined' ? null : supplierOrdersLegacyDifferenceRedirect(window.location.search)
@@ -183,8 +188,69 @@ export default function SupplierOrdersPage() {
   // Operation-group listing, batch confirmation, group printing, and group
   // add-product actions belong only to the internal supply-chain page.
   const displayOrders = visible
+  const batchEligible = !internalSupplyChain && documentView === 'orders' && (filter === '待接单' || filter === '待发货')
+  const selectedVisibleIds = displayOrders.filter(order => selectedOrderIds.includes(order.id)).map(order => order.id)
+  const allVisibleSelected = displayOrders.length > 0 && displayOrders.every(order => selectedOrderIds.includes(order.id))
   const hasMoreOrders = orders !== null && orders.length < ordersTotal
   const hasMoreDeliveries = deliveries !== null && deliveries.length < deliveriesTotal
+
+  function toggleOrderSelection(orderId: string) {
+    setSelectedOrderIds(current => {
+      if (current.includes(orderId)) return current.filter(id => id !== orderId)
+      if (current.length >= SELECTED_ORDER_LIMIT) {
+        setError(`一次最多选择 ${SELECTED_ORDER_LIMIT} 张订单`)
+        return current
+      }
+      return [...current, orderId]
+    })
+  }
+
+  function toggleAllVisible() {
+    const visibleIds = displayOrders.map(order => order.id)
+    setSelectedOrderIds(current => {
+      if (allVisibleSelected) return current.filter(id => !visibleIds.includes(id))
+      const next = Array.from(new Set([...current, ...visibleIds]))
+      if (next.length > SELECTED_ORDER_LIMIT) {
+        setError(`一次最多选择 ${SELECTED_ORDER_LIMIT} 张订单，请缩小当前列表范围`)
+        return current
+      }
+      return next
+    })
+  }
+
+  function exportSelectedOrders() {
+    if (!selectedVisibleIds.length) return
+    const params = new URLSearchParams({ orderIds: selectedVisibleIds.join(',') })
+    window.open(`/api/orders/export.xlsx?${params.toString()}`, '_blank', 'noopener')
+  }
+
+  async function runBatchOrderAction(action: 'confirm' | 'ship') {
+    const ids = selectedVisibleIds
+    if (!ids.length || batchBusy) return
+    const label = action === 'confirm' ? '接单' : '按订货数量发货'
+    if (!window.confirm(`确认对已选 ${ids.length} 张订单批量${label}？${action === 'ship' ? '如需调整实发数量，请进入订单详情单独发货。' : ''}`)) return
+    setBatchBusy(true)
+    setError(null)
+    setNotice(null)
+    const succeeded: string[] = []
+    const failed: Array<{ id: string; message: string }> = []
+    for (const id of ids) {
+      try {
+        await apiFetch(`/api/orders/${encodeURIComponent(id)}/${action}`, {
+          method: 'PATCH',
+          ...(action === 'ship' ? { body: JSON.stringify({ idempotencyKey: clientRequestId() }) } : {}),
+        })
+        succeeded.push(id)
+      } catch (reason: any) {
+        failed.push({ id, message: String(reason?.message || reason || '操作失败') })
+      }
+    }
+    setSelectedOrderIds(current => current.filter(id => !succeeded.includes(id)))
+    setNotice(`批量${label}完成：成功 ${succeeded.length}，失败 ${failed.length}`)
+    if (failed.length) setError(failed.map(item => `${orders?.find(order => order.id === item.id)?.no || item.id}：${item.message}`).join('；'))
+    await load(appliedSearch, filter)
+    setBatchBusy(false)
+  }
 
   return (
     <div className="min-h-screen bg-bg pb-20">
@@ -200,11 +266,11 @@ export default function SupplierOrdersPage() {
       </header>
 
       <div className="px-4 grid grid-cols-2 gap-2">
-        <button type="button" onClick={() => { setDocumentView('orders'); void load(appliedSearch) }}
+        <button type="button" onClick={() => { setDocumentView('orders'); setSelectedOrderIds([]); void load(appliedSearch) }}
           className={`py-2 rounded-cta text-button ${documentView === 'orders' ? 'bg-ink text-white' : 'bg-white border border-border text-gray2'}`}>
           门店订货单
         </button>
-        <button type="button" onClick={() => { setDocumentView('deliveries'); void loadDeliveries(appliedSearch) }}
+        <button type="button" onClick={() => { setDocumentView('deliveries'); setSelectedOrderIds([]); void loadDeliveries(appliedSearch) }}
           className={`py-2 rounded-cta text-button ${documentView === 'deliveries' ? 'bg-ink text-white' : 'bg-white border border-border text-gray2'}`}>
           配送单
         </button>
@@ -261,7 +327,7 @@ export default function SupplierOrdersPage() {
           return (
             <button key={f} onClick={() => f === '到货差异'
               ? location.href = internalSupplyChain ? '/v2/supply-chain/receipts' : SUPPLIER_DIFFERENCES_PATH
-              : (setFilter(f), void load(appliedSearch, f))}
+              : (setFilter(f), setSelectedOrderIds([]), void load(appliedSearch, f))}
               className={`shrink-0 px-3 py-1.5 rounded-cta text-button relative ${f !== '到货差异' && filter === f ? 'bg-ink text-white' : 'bg-white border border-border text-gray2'}`}>
               <span>{f}</span>
               {cnt > 0 && <span className={`font-num ml-1 ${f !== '到货差异' && filter === f ? '' : isUrgent ? 'text-red-fg' : 'text-gray3'}`}>{cnt}</span>}
@@ -272,6 +338,28 @@ export default function SupplierOrdersPage() {
       </div>}
 
       {error && <div className="mx-4 mt-3 bg-red-bg text-red-fg rounded-card p-3 text-caption">{error}</div>}
+      {notice && <div className="mx-4 mt-3 rounded-card border border-emerald-200 bg-emerald-50 p-3 text-caption text-emerald-700">{notice}</div>}
+
+      {batchEligible && displayOrders.length > 0 && (
+        <div className="mx-4 mt-3 flex flex-wrap items-center gap-3 rounded-card border border-border bg-white p-3">
+          <label className="flex items-center gap-2 text-caption text-gray2">
+            <input type="checkbox" checked={allVisibleSelected} onChange={toggleAllVisible} />
+            全选当前页（{displayOrders.length}）
+          </label>
+          <span className="text-caption text-gray3">已选 {selectedVisibleIds.length} 张</span>
+          <div className="flex-1" />
+          <button type="button" disabled={selectedVisibleIds.length === 0}
+            onClick={exportSelectedOrders}
+            className="rounded-cta border border-ink px-4 py-2 text-button text-ink disabled:opacity-40">
+            导出所选
+          </button>
+          <button type="button" disabled={batchBusy || selectedVisibleIds.length === 0}
+            onClick={() => void runBatchOrderAction(filter === '待接单' ? 'confirm' : 'ship')}
+            className="rounded-cta bg-ink px-4 py-2 text-button text-white disabled:opacity-40">
+            {batchBusy ? '处理中…' : filter === '待接单' ? '批量接单' : '批量发货'}
+          </button>
+        </div>
+      )}
 
       {/* 普通订单 tabs 内容 */}
       {documentView === 'orders' && (
@@ -279,7 +367,7 @@ export default function SupplierOrdersPage() {
         {visible.length === 0 && orders !== null && (
           <li className="text-caption text-gray3 text-center py-12">暂无{filter}订单</li>
         )}
-        {displayOrders.map(o => {
+        {displayOrders.map((o, index) => {
           const status = supplierOrderStatusMeta(o.status)
           const tone = status.tone
           const stepIdx = Math.max(0, status.progressStep - 1)
@@ -295,6 +383,13 @@ export default function SupplierOrdersPage() {
             <li key={o.id}
                 onClick={() => location.href = `${orderBase}/${o.id}`}
                 className={`relative bg-white rounded-card p-3 pl-4 border border-border before:content-[''] before:absolute before:left-0 before:top-3 before:bottom-3 before:w-[3px] before:rounded-full ${tone === 'red' ? 'before:bg-red' : tone === 'orange' ? 'before:bg-orange' : 'before:bg-gray4'} cursor-pointer hover:bg-bg-warm transition-colors`}>
+              {batchEligible && (
+                <label className="mb-2 inline-flex items-center gap-2 text-caption text-gray2" onClick={event => event.stopPropagation()}>
+                  <input type="checkbox" aria-label={`选择订单 ${o.no}`} checked={selectedOrderIds.includes(o.id)} onChange={() => toggleOrderSelection(o.id)} />
+                  <span className="font-num">{index + 1}</span>
+                  选择此订单
+                </label>
+              )}
               <div className="flex items-center gap-2 mb-1 flex-wrap">
                 <Chip tone={tone}>{status.label}</Chip>
                 {isToShip && <Chip tone="red">需即办</Chip>}

@@ -1,6 +1,6 @@
 # 滇界项目启动记忆
 
-当前业务版本1.3.4，最新程序热修复为1.3.4-hotfix.3，正式与测试均已部署。开始任务先读AGENTS.md、RELEASE_VERSION.json、docs/releases/1.3.4-hotfix.3.md及机器记录。
+当前正式业务版本为1.3.6，测试版仍为1.3.5（用户本次要求不切测试版）。开始任务先读AGENTS.md、RELEASE_VERSION.json、docs/releases/1.3.6.md及机器记录。1.3.6 基于已发布 1.3.5 的独立整合工作树，恢复近期本地的入库、配送、供应商、库存和盘点改动；正式版健康与备份见发布记录。旧业务语义下有一张已审核未复审且未过账的入库单，未自动补账，后续须单独核对。
 
 正式入口https://dianjie.cc/v2/login；测试入口https://www.dianjie.cc:8085/v2/login，测试默认supply-chain-uat，生产默认正式租户。两个环境数据库、签名与会话独立。不得把本地测试账号、密码、数据、附件或适配器带入发布包。
 

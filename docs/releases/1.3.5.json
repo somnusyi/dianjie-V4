@@ -4,7 +4,7 @@
   "previousVersion": "1.3.4",
   "releaseId": "v1.3.5-20261124",
   "businessReleaseId": "store-brand-transfer-20261124",
-  "status": "preparing",
+  "status": "released_production_and_uat",
   "sourceBaselineTag": "v1.3.4-hotfix.5",
   "tag": "v1.3.5",
   "scope": [
@@ -25,11 +25,52 @@
   ],
   "environments": {
     "uat": {
-      "status": "preparing"
+      "status": "deployed",
+      "deployedAt": "2026-11-25T07:28:44.746226454Z",
+      "publicBase": "https://www.dianjie.cc:8085",
+      "apiImageId": "sha256:3299b5d9435557ee747e987caa85e573a81ef70537fb3cef9ffcfb941475789b",
+      "webImageId": "sha256:4f276149df09cbb463382aff07d78de671f3d6ecdff18b37657d9436b53b077b",
+      "webBuildId": "xEcbO2EVv95-xORjKS-DH",
+      "health": "1.3.5_db_ok",
+      "migrationsApplied": 2,
+      "oldStoreBrand": "unassigned",
+      "rollbackContainers": [
+        "dianjie-uat-api-before-135-20261124",
+        "dianjie-uat-web-before-135-20261124"
+      ]
     },
     "production": {
-      "status": "preparing"
+      "status": "deployed",
+      "deployedAt": "2026-11-25T07:30:58.721857257Z",
+      "publicBase": "https://dianjie.cc",
+      "apiImageId": "sha256:275185f2061d35f409d6454a967288f366a4c1c4aaab759649ff241a8b60fae6",
+      "webImageId": "sha256:9eb0cb8ef1cc60126f291691e5e612705d9af68d4b05adbcf1e2c8ff72ab6dae",
+      "webBuildId": "osIVTQ-u09wEC52J7z9YD",
+      "health": "1.3.5_db_ok",
+      "migrationsApplied": 2,
+      "storeBrandCounts": {
+        "DIANJIE": 24,
+        "LANCANGYAO": 3
+      },
+      "rollbackContainers": [
+        "dianjie-production-api-before-135-20261124",
+        "dianjie-production-web-before-135-20261124"
+      ]
     }
   },
-  "rollbackPolicy": "保留两套环境现运行镜像和容器、迁移前业务库备份；新调拨事实产生后只回退程序到兼容新结构的已验证镜像或前向修复，不直接回滚业务数据库。"
+  "rollbackPolicy": "保留两套环境现运行镜像和容器、迁移前业务库备份；新调拨事实产生后只回退程序到兼容新结构的已验证镜像或前向修复，不直接回滚业务数据库。",
+  "sourceCommit": "2278c9d3961f8848fbf6136d062bb1294e47869d",
+  "dataImports": 0,
+  "businessDataImported": false,
+  "localVerification": {
+    "status": "passed",
+    "apiFocused": 43,
+    "apiOperationGroup": 8,
+    "webFocused": 72,
+    "typecheck": "api_and_web_passed",
+    "productionBuild": "api_and_two_web_variants_passed",
+    "prismaSchema": "valid",
+    "storeTransferMouseAcceptance": "passed_in_isolated_local_environment_20261124"
+  },
+  "remoteStatus": "github_and_gitea_verified"
 }

@@ -1,8 +1,8 @@
 {
-  "version": "1.3.5",
-  "namedOn": "2026-11-24",
-  "previousVersion": "1.3.4",
-  "releaseId": "v1.3.5-20261124",
-  "businessReleaseId": "store-brand-transfer-20261124",
-  "record": "docs/releases/1.3.5.json"
+  "version": "1.3.6",
+  "namedOn": "2026-11-25",
+  "previousVersion": "1.3.5",
+  "releaseId": "v1.3.6-20261125",
+  "businessReleaseId": "local-feedback-integration-20261125",
+  "record": "docs/releases/1.3.6.json"
 }

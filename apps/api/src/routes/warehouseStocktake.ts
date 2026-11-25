@@ -182,7 +182,6 @@ export const warehouseStocktakeRoutes: FastifyPluginAsync = async app => {
       ...row,
       countDate: row.countDate.toISOString().slice(0, 10),
       source: 'warehouse',
-      store: { name: row.warehouse.name },
       items: row.sections.flatMap(section => section.items.map(item => ({
         id: item.id,
         productCodeSnapshot: item.productCodeSnapshot,

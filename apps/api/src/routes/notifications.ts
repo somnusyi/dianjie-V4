@@ -1,6 +1,7 @@
 import { FastifyPluginAsync } from 'fastify'
 import { prisma } from '@dianjie/db'
 import { z } from 'zod'
+import { isStoreScoped } from '../lib/auth-scope'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 const listQuerySchema = z.object({
@@ -8,6 +9,14 @@ const listQuerySchema = z.object({
   pageSize: z.coerce.number().int().min(1).max(50).default(20),
   unreadOnly: z.enum(['true', 'false']).optional().transform(value => value === 'true'),
 }).strict()
+
+function recipientWhere(userId: string, role: string) {
+  // Legacy role broadcasts have no storeId and cannot be assigned to a brand.
+  // Store accounts can access only notifications addressed to their own user ID.
+  return isStoreScoped(role)
+    ? { recipientId: userId }
+    : { OR: [{ recipientId: userId }, { recipientId: null, recipientRole: role }] }
+}
 
 export const notificationRoutes: FastifyPluginAsync = async (app) => {
 
@@ -20,10 +29,7 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
 
     const where: any = {
       tenantId,
-      OR: [
-        { recipientId: userId },
-        { recipientId: null, recipientRole: role },
-      ],
+      ...recipientWhere(userId, role),
     }
     if (unreadOnly) where.read = false
 
@@ -47,10 +53,7 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
       where: {
         tenantId,
         read: false,
-        OR: [
-          { recipientId: userId },
-          { recipientId: null, recipientRole: role },
-        ],
+        ...recipientWhere(userId, role),
       },
     })
     return { count }
@@ -65,10 +68,7 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
       where: {
         id: parsed.data.id,
         tenantId,
-        OR: [
-          { recipientId: userId },
-          { recipientId: null, recipientRole: role },
-        ],
+        ...recipientWhere(userId, role),
       },
       data: { read: true },
     })
@@ -83,10 +83,7 @@ export const notificationRoutes: FastifyPluginAsync = async (app) => {
       where: {
         tenantId,
         read: false,
-        OR: [
-          { recipientId: userId },
-          { recipientId: null, recipientRole: role },
-        ],
+        ...recipientWhere(userId, role),
       },
       data: { read: true },
     })

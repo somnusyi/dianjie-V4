@@ -7,10 +7,8 @@ import { useEffect, useMemo, useState } from 'react'
 import { Chip } from '@/components/v2'
 import { DateRangeCalendar, type DateRangeValue } from '@/components/v2/date-range-calendar'
 import { apiFetch } from '@/lib/v2-auth'
-import { businessDateKey } from '@/lib/business-date'
 
 type Store = { id: string; no: string; name: string }
-type Product = { id: string; code: string; name: string; inventoryUnit?: string | null }
 type TransferStatus = 'PENDING' | 'SHIPPED' | 'PARTIALLY_RECEIVED' | 'RECEIVED' | 'REVOKED'
 type TransferItem = { id: string; name: string; quantity: number; unit: string; cost: number; settlement: number; pendingQuantity: number; receivedQuantity: number; returnedQuantity: number; damagedQuantity: number }
 type Transfer = {
@@ -30,45 +28,25 @@ type Transfer = {
 const FILTER_STORAGE_KEY = 'dianjie-supply-chain-store-transfer-filters-v1'
 
 const STATUS_META: Record<TransferStatus, { label: string; tone: 'orange' | 'blue' | 'green' | 'gray' }> = {
-  PENDING: { label: '待发货', tone: 'orange' },
+  PENDING: { label: '待审核', tone: 'orange' },
   SHIPPED: { label: '已发货', tone: 'blue' },
   PARTIALLY_RECEIVED: { label: '差异待处理', tone: 'orange' },
-  RECEIVED: { label: '已闭环', tone: 'green' },
-  REVOKED: { label: '已撤回', tone: 'gray' },
+  RECEIVED: { label: '已完成', tone: 'green' },
+  REVOKED: { label: '已驳回或撤回', tone: 'gray' },
 }
 
 export default function StoreTransfersPage() {
   const [confirmState, openConfirm] = useConfirmSheet()
-  const [processing, setProcessing] = useState<{ row: Transfer; action: 'RECEIVE' | 'RETURN' | 'DAMAGE'; quantities: Record<string, string>; note: string; requestKey: string } | null>(null)
-  const [processingError, setProcessingError] = useState('')
-  function openProcessing(row: Transfer, action: 'RECEIVE' | 'RETURN' | 'DAMAGE') {
-    setProcessingError('')
-    setProcessing({row, action, quantities:Object.fromEntries(row.items.map(i=>[i.id, action === 'RECEIVE' ? String(i.pendingQuantity) : '0'])),note:'',requestKey:crypto.randomUUID()})
-  }
-  async function saveProcessing() {
-    if (!processing || busy) return
-    const all = processing.row.items.map(i=>({itemId:i.id,quantity:Number(processing.quantities[i.id])}))
-    const items = all.filter(i=>i.quantity>0)
-    if (!items.length || all.some(i=>!Number.isFinite(i.quantity) || i.quantity < 0)) {setProcessingError('请填写有效处理数量');return}
-    setBusy('processing');setProcessingError('')
-    try {
-      await apiFetch(`/api/store-transfers/${processing.row.id}/${processing.action === 'RECEIVE' ? 'receive' : 'resolve-difference'}`, {method:'POST',body:JSON.stringify({requestKey:processing.requestKey,items,note:processing.note,...(processing.action === 'RECEIVE' ? {} : {action:processing.action})})})
-      await loadTransfers();setProcessing(null)
-    } catch (e:any) {setProcessingError(e.message || '处理失败，请重试')} finally {setBusy('')}
-  }
   const [stores, setStores] = useState<Store[]>([])
-  const [products, setProducts] = useState<Product[]>([])
   const [transfers, setTransfers] = useState<Transfer[]>([])
   const [ready, setReady] = useState(false)
   const [storeError, setStoreError] = useState('')
   const [busy, setBusy] = useState('')
-  const [showCreate, setShowCreate] = useState(false)
   const [dateRange, setDateRange] = useState<DateRangeValue>({ from: '', to: '' })
   const [fromStoreId, setFromStoreId] = useState('')
   const [toStoreId, setToStoreId] = useState('')
   const [status, setStatus] = useState<TransferStatus | ''>('')
   const [keyword, setKeyword] = useState('')
-  const [form, setForm] = useState({ transferDate: businessDateKey(), fromStoreId: '', toStoreId: '', productId: '', quantity: '1', cost: '0', settlement: '0', note: '' })
 
   useEffect(() => {
     loadTransfers().finally(() => setReady(true))
@@ -92,14 +70,6 @@ export default function StoreTransfersPage() {
       })
       .catch(reason => {
         if (alive) setStoreError(`门店列表加载失败：${String(reason?.message || reason)}`)
-      })
-    apiFetch<Product[]>('/api/store-transfers/products')
-      .then(data => {
-        if (!alive) return
-        setProducts(data)
-      })
-      .catch(reason => {
-        if (alive) setStoreError(`调拨商品加载失败：${String(reason?.message || reason)}`)
       })
     return () => { alive = false }
   }, [])
@@ -141,44 +111,8 @@ export default function StoreTransfersPage() {
     }
   }
 
-  async function createTransfer() {
-    setStoreError('')
-    if (!form.fromStoreId || !form.toStoreId || !form.productId) {
-      setStoreError('请先选择调出门店、调入门店和商品')
-      return
-    }
-    const quantity = Number(form.quantity)
-    const cost = Number(form.cost)
-    const settlement = Number(form.settlement)
-    if (!Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(cost) || cost < 0 || !Number.isFinite(settlement) || settlement < 0) {
-      setStoreError('数量、成本价、结算价格式不正确')
-      return
-    }
-    setBusy('create')
-    try {
-      await apiFetch('/api/store-transfers', {
-        method: 'POST',
-        body: JSON.stringify({
-          fromStoreId: form.fromStoreId,
-          toStoreId: form.toStoreId,
-          transferDate: form.transferDate,
-          note: form.note,
-          requestKey: crypto.randomUUID(),
-          items: [{ productId: form.productId, quantity, cost, settlement }],
-        }),
-      })
-      setShowCreate(false)
-      setForm(current => ({ ...current, productId: '', quantity: '1', cost: '0', settlement: '0', note: '' }))
-      await loadTransfers()
-    } catch (e: any) {
-      setStoreError(e.message || '新建调拨单失败')
-    } finally {
-      setBusy('')
-    }
-  }
-
-  function requestStatusChange(row: Transfer, nextStatus: 'SHIPPED' | 'RECEIVED' | 'REVOKED') {
-    const label = nextStatus === 'SHIPPED' ? '审核发货' : nextStatus === 'RECEIVED' ? '确认收货' : '撤回'
+  function requestStatusChange(row: Transfer, nextStatus: 'APPROVED' | 'REVOKED') {
+    const label = nextStatus === 'APPROVED' ? '审核通过并转移库存' : '驳回'
     openConfirm({
       title: `确认${label}调拨单？`,
       body: `调拨单 ${row.no} 将更新状态，请核对调出门店、调入门店和商品明细。`,
@@ -188,11 +122,12 @@ export default function StoreTransfersPage() {
     })
   }
 
-  async function changeStatus(row: Transfer, nextStatus: 'SHIPPED' | 'RECEIVED' | 'REVOKED', label: string) {
+  async function changeStatus(row: Transfer, nextStatus: 'APPROVED' | 'REVOKED', label: string) {
     setBusy(`${row.id}:${nextStatus}`)
     setStoreError('')
     try {
-      await apiFetch(`/api/store-transfers/${row.id}/status`, { method: 'PATCH', body: JSON.stringify({ status: nextStatus }) })
+      if (nextStatus === 'APPROVED') await apiFetch(`/api/store-transfers/${row.id}/approve`, { method: 'POST' })
+      else await apiFetch(`/api/store-transfers/${row.id}/status`, { method: 'PATCH', body: JSON.stringify({ status: 'REVOKED' }) })
       await loadTransfers()
     } catch (e: any) {
       const message = e.message || `${label}失败`
@@ -212,48 +147,15 @@ export default function StoreTransfersPage() {
             <span className="text-caption text-gray3">调拨登记 · 已连接后台</span>
           </div>
           <h1 className="text-h1">门店调拨单</h1>
-          <p className="mt-1 text-caption text-gray2">调拨按调出门店可靠账面成本平价发货，实收才计入调入店；差异须完成退回或损坏处置。</p>
+          <p className="mt-1 text-caption text-gray2">门店发起调拨，供应链审核通过后，库存即时从调出门店转到调入门店。</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <div className="rounded-cta border border-green-200 bg-green-bg px-4 py-2.5 text-caption text-green-fg">供应链审核 · 可新建、发货、收货、撤回</div>
-          <button type="button" onClick={() => setShowCreate(value => !value)} className="h-11 rounded-cta bg-accent px-4 text-button text-white shadow-card">+新建调拨单</button>
+          <div className="rounded-cta border border-green-200 bg-green-bg px-4 py-2.5 text-caption text-green-fg">门店发起 · 供应链审核后库存即时转移</div>
         </div>
       </header>
 
       <main className="mx-auto max-w-[1440px]">
         {storeError && <div className="mt-4 rounded-card border border-red-fg/20 bg-red-bg px-4 py-3 text-caption text-red-fg">{storeError}</div>}
-
-        {showCreate && <section className="mt-4 rounded-card border border-border bg-white p-4 shadow-card">
-          <div className="mb-3 flex items-center justify-between gap-3">
-            <div>
-              <h2 className="text-h2">新建门店调拨单</h2>
-              <p className="text-caption text-gray2">供应链审核录入一张门店间调拨；保存后状态为待发货。</p>
-            </div>
-            <button type="button" onClick={() => setShowCreate(false)} className="rounded-cta border border-border bg-white px-3 py-2 text-caption text-gray2">收起</button>
-          </div>
-          <div className="grid gap-3 md:grid-cols-4">
-            <label className="flex flex-col gap-1"><span className="text-micro text-gray3">调拨日期</span><input type="date" value={form.transferDate} onChange={event => setForm({ ...form, transferDate: event.target.value })} className="h-11 rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent" /></label>
-            <FilterSelect label="调出门店" value={form.fromStoreId} onChange={value => {setForm(current=>({...current,fromStoreId:value,toStoreId:current.toStoreId===value?'':current.toStoreId}));if(form.toStoreId===value)setStoreError('调入与调出门店不能相同，请重新选择调入门店')}}>
-              <option value="">请选择</option>
-              {stores.map(store => <option key={store.id} value={store.id}>{store.no} · {store.name}</option>)}
-            </FilterSelect>
-            <FilterSelect label="调入门店" value={form.toStoreId} onChange={value => setForm({ ...form, toStoreId: value })}>
-              <option value="">请选择</option>
-              {stores.filter(store=>store.id!==form.fromStoreId).map(store => <option key={store.id} value={store.id}>{store.no} · {store.name}</option>)}
-            </FilterSelect>
-            <FilterSelect label="调拨商品" value={form.productId} onChange={value => setForm({ ...form, productId: value })}>
-              <option value="">请选择</option>
-              {products.map(product => <option key={product.id} value={product.id}>{product.code} · {product.name}{product.inventoryUnit ? ` / ${product.inventoryUnit}` : ''}</option>)}
-            </FilterSelect>
-            <NumberInput label="数量" value={form.quantity} onChange={value => setForm({ ...form, quantity: value })} />
-            <p className="text-caption text-gray2">调拨价格在审核发货时按调出门店可靠成本自动冻结，两店同价。</p>
-            <label className="flex flex-col gap-1"><span className="text-micro text-gray3">备注</span><input value={form.note} onChange={event => setForm({ ...form, note: event.target.value })} placeholder="可选" className="h-11 rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent" /></label>
-          </div>
-          <div className="mt-4 flex justify-end gap-2">
-            <button type="button" onClick={() => setShowCreate(false)} className="h-10 rounded-cta border border-border bg-white px-4 text-button text-gray2">取消</button>
-            <button type="button" disabled={busy === 'create'} onClick={createTransfer} className="h-10 rounded-cta bg-accent px-4 text-button text-white disabled:opacity-60">{busy === 'create' ? '保存中...' : '保存调拨单'}</button>
-          </div>
-        </section>}
 
         <section className="flex flex-wrap items-end gap-3 py-4">
           <DateRangeCalendar label="调拨日期" value={dateRange} onChange={setDateRange} />
@@ -292,16 +194,16 @@ export default function StoreTransfersPage() {
                   <td className="whitespace-nowrap px-4 py-4 font-num text-gray2">{row.transferDate}</td>
                   <td className="whitespace-nowrap px-4 py-4">{row.fromStore.name}<div className="text-micro text-gray3">{row.fromStore.no}</div></td>
                   <td className="whitespace-nowrap px-4 py-4">{row.toStore.name}<div className="text-micro text-gray3">{row.toStore.no}</div></td>
-                  <td className="min-w-64 px-4 py-4 text-gray2">{row.items.map(item => `${item.name} 发出${item.quantity}${item.unit}／实收${item.receivedQuantity ?? 0}／退回${item.returnedQuantity ?? 0}／损坏${item.damagedQuantity ?? 0}／待处理${item.pendingQuantity ?? item.quantity}`).join('、')}</td>
+                  <td className="min-w-64 px-4 py-4 text-gray2">{row.items.map(item => `${item.name} ${item.quantity}${item.unit}`).join('、')}</td>
                   <td className="whitespace-nowrap px-4 py-4"><Chip tone={STATUS_META[row.status]?.tone || 'gray'}>{STATUS_META[row.status]?.label || row.status}</Chip></td>
                   <td className="whitespace-nowrap px-4 py-4 font-num text-gray2">{new Date(row.createdAt).toLocaleString('zh-CN', { hour12: false, timeZone: 'Asia/Shanghai' })}</td>
                   <td className="whitespace-nowrap px-4 py-4 text-right">
                     {row.status === 'PENDING' && <div className="flex justify-end gap-2">
-                      <ActionButton disabled={busy === `${row.id}:SHIPPED`} onClick={() => requestStatusChange(row, 'SHIPPED')}>审核发货</ActionButton>
-                      <ActionButton disabled={busy === `${row.id}:REVOKED`} tone="gray" onClick={() => requestStatusChange(row, 'REVOKED')}>撤回</ActionButton>
+                      <ActionButton disabled={busy === `${row.id}:APPROVED`} onClick={() => requestStatusChange(row, 'APPROVED')}>审核通过</ActionButton>
+                      <ActionButton disabled={busy === `${row.id}:REVOKED`} tone="gray" onClick={() => requestStatusChange(row, 'REVOKED')}>驳回</ActionButton>
                     </div>}
-                    {['SHIPPED','PARTIALLY_RECEIVED'].includes(row.status) && <div className="flex justify-end gap-2"><ActionButton disabled={Boolean(busy)} onClick={() => openProcessing(row,'RECEIVE')}>登记实收</ActionButton><ActionButton disabled={Boolean(busy)} onClick={() => openProcessing(row,'RETURN')}>完好退回</ActionButton><ActionButton disabled={Boolean(busy)} onClick={() => openProcessing(row,'DAMAGE')}>损坏处置</ActionButton></div>}
-                    {['RECEIVED', 'REVOKED'].includes(row.status) && <span className="text-micro text-gray3">已完成</span>}
+                    {['SHIPPED','PARTIALLY_RECEIVED'].includes(row.status) && <span className="text-micro text-gray3">历史调拨单</span>}
+                    {['RECEIVED', 'REVOKED'].includes(row.status) && <span className="text-micro text-gray3">{row.status === 'RECEIVED' ? '已完成' : '无需操作'}</span>}
                   </td>
                 </tr>)}
                 {ready && visible.length === 0 && <tr><td colSpan={9} className="px-4 py-16 text-center text-gray3">
@@ -313,7 +215,6 @@ export default function StoreTransfersPage() {
           <div className="border-t border-border bg-bg px-4 py-3 text-right text-caption text-gray3">共 {visible.length} 条记录</div>
         </div>
       </main>
-      {processing && <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 p-4"><section role="dialog" aria-modal="true" aria-label="调拨数量处理" className="max-h-[85vh] w-full max-w-2xl overflow-auto rounded-card bg-white p-5 shadow-xl"><h2 className="text-h2">{processing.action === 'RECEIVE' ? '登记实收' : processing.action === 'RETURN' ? '完好退回' : '损坏处置'} · {processing.row.no}</h2><p className="my-3 text-caption text-gray2">只填写本次实际处理数量；未处理部分继续保留差异。</p><div className="space-y-3">{processing.row.items.map(i=><label key={i.id} className="flex items-center justify-between gap-4"><span>{i.name} · 待处理 {i.pendingQuantity} {i.unit}</span><input type="text" inputMode="decimal" aria-label={`${i.name}处理数量`} value={processing.quantities[i.id]} onChange={e=>setProcessing({...processing,quantities:{...processing.quantities,[i.id]:e.target.value},requestKey:crypto.randomUUID()})} className="w-32 rounded border border-border p-2" /></label>)}</div><label className="mt-4 block">说明<textarea aria-label="处置说明" className="mt-1 w-full rounded border border-border p-2" value={processing.note} onChange={e=>setProcessing({...processing,note:e.target.value,requestKey:crypto.randomUUID()})}/></label>{processingError && <p role="alert" className="my-2 text-red-600">{processingError}</p>}<div className="mt-4 flex justify-end gap-3"><button disabled={Boolean(busy)} onClick={()=>setProcessing(null)} className="rounded border border-border px-4 py-2">取消</button><button disabled={Boolean(busy)} onClick={saveProcessing} className="rounded bg-accent px-4 py-2 text-white">确认</button></div></section></div>}
       <ConfirmSheet {...confirmState} />
     </div>
   )
@@ -321,10 +222,6 @@ export default function StoreTransfersPage() {
 
 function FilterSelect({ label, value, onChange, children }: { label: string; value: string; onChange: (value: string) => void; children: React.ReactNode }) {
   return <label className="flex min-w-48 flex-col gap-1"><span className="text-micro text-gray3">{label}</span><SearchableSelect searchWhenLong searchLabel={`搜索${label}`} value={value} onChange={event => onChange(event.target.value)} className="h-11 rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent">{children}</SearchableSelect></label>
-}
-
-function NumberInput({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
-  return <label className="flex flex-col gap-1"><span className="text-micro text-gray3">{label}</span><input type="number" min="0" step="0.000001" value={value} onChange={event => onChange(event.target.value)} className="h-11 rounded-cta border border-border bg-white px-3 text-body outline-none focus:border-accent" /></label>
 }
 
 function ActionButton({ children, disabled, tone = 'accent', onClick }: { children: React.ReactNode; disabled?: boolean; tone?: 'accent' | 'gray'; onClick: () => void }) {

@@ -1,8 +1,8 @@
 {
-  "version": "1.3.4",
-  "namedOn": "2026-11-17",
-  "previousVersion": "1.3.3",
-  "releaseId": "v1.3.4-20261117",
-  "businessReleaseId": "stocktake-20261117",
-  "record": "docs/releases/1.3.4.json"
+  "version": "1.3.5",
+  "namedOn": "2026-11-24",
+  "previousVersion": "1.3.4",
+  "releaseId": "v1.3.5-20261124",
+  "businessReleaseId": "store-brand-transfer-20261124",
+  "record": "docs/releases/1.3.5.json"
 }

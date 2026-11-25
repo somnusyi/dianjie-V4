@@ -598,7 +598,7 @@ export async function loadOperationGroupDetails(
       status: row.status,
       shippedAt: row.shippedAt ? dateText(row.shippedAt) : null,
       store: row.store ? {
-        id: row.store.id, name: row.store.name, no: row.store.no,
+        id: row.store.id, name: row.store.name, no: row.store.no, brandCode: row.store.brandCode ?? null,
         address: row.store.address || null, managerName: row.store.managerName || null,
         phone: row.store.phone || null,
       } : null,

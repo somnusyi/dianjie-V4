@@ -76,7 +76,7 @@ export const SUPPLY_CHAIN_NAV_GROUPS: Array<{ title: string; items: NavItem[] }>
       },
       { href: '/v2/supply-chain/procurement', label: '上游采购', description: '发起采购、到货验收、退货与差异', icon: '采' },
       { href: '/v2/supply-chain/procurement/orders', label: '采购记录', description: '采购单查询与处理', icon: '录' },
-      { href: '/v2/supply-chain/transfers', label: '门店调拨', description: '门店间调出、发货与收货', icon: '调' },
+      { href: '/v2/supply-chain/transfers', label: '门店调拨', description: '审核门店发起的调拨', icon: '调' },
       { href: '/v2/supply-chain/suppliers', label: '上游供应商', description: '总仓采购合作方', icon: '供' },
     ],
   },

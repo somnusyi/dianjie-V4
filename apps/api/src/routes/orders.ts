@@ -619,7 +619,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
         where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip, take: ps,
         include: {
-          store: { select: { id: true, name: true } },
+          store: { select: { id: true, no: true, name: true, brandCode: true } },
           supplier: { select: { id: true, name: true } },
           createdBy: { select: { id: true, name: true, role: true } },
           events: {
@@ -3543,6 +3543,7 @@ export const purchaseOrderRoutes: FastifyPluginAsync = async (app) => {
     const supplier = await prisma.supplier.findUnique({ where: { id: order.supplierId }, select: { name: true } })
     void sendNotification({
       tenantId, recipientRole: 'MANAGER' as any,
+      storeId: order.storeId,
       type: 'ORDER_DELIVERED' as any,
       title: `订单已送达, 请尽快验收 ${order.no}`,
       body: `${supplier?.name || ''} 已送达，请门店尽快人工确认收货；系统不会自动收货`,

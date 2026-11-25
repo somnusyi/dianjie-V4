@@ -2,6 +2,7 @@ import { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
 import { prisma } from '@dianjie/db'
 import bcrypt from 'bcryptjs'
+import { isStoreBrandRole, isValidStoreBrandAssignment } from '../lib/store-brand-assignment'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 
@@ -129,8 +130,9 @@ export const userRoutes: FastifyPluginAsync = async (app) => {
         if (STORE_BOUND_ROLES.has(newRole) && storeIds.length === 0) return { status: 400, error: '该角色必须绑定门店' }
         if (SUPPLIER_BOUND_ROLES.has(newRole) && !supplierId) return { status: 400, error: '该角色必须绑定供应商' }
         if (storeIds.length > 0) {
-          const stores = await tx.store.findMany({ where: { id: { in: storeIds }, tenantId, status: 'ENABLED' }, select: { id: true } })
+          const stores = await tx.store.findMany({ where: { id: { in: storeIds }, tenantId, status: 'ENABLED' }, select: { id: true, brandCode: true } })
           if (stores.length !== storeIds.length) return { status: 400, error: '门店不存在或已停用' }
+          if (!isValidStoreBrandAssignment(newRole, stores)) return { status: 400, error: '门店岗位只能绑定同一品牌的门店' }
         }
         if (supplierId) {
           const supplier = await tx.supplier.findFirst({ where: { id: supplierId, tenantId, status: 'ENABLED' }, select: { id: true } })
@@ -203,9 +205,10 @@ export const userRoutes: FastifyPluginAsync = async (app) => {
         if (emailDuplicate && emailDuplicate.id !== target.id) return { status: 400, error: '该邮箱已被使用' }
         if (STORE_BOUND_ROLES.has(newRole) && storeIds.length === 0) return { status: 400, error: '该角色必须绑定门店' }
         if (SUPPLIER_BOUND_ROLES.has(newRole) && !supplierId) return { status: 400, error: '该角色必须绑定供应商' }
-        if (storesTouched && storeIds.length > 0) {
-          const stores = await tx.store.findMany({ where: { id: { in: storeIds }, tenantId, status: 'ENABLED' }, select: { id: true } })
+        if ((storesTouched || (parsed.data.role !== undefined && isStoreBrandRole(newRole))) && storeIds.length > 0) {
+          const stores = await tx.store.findMany({ where: { id: { in: storeIds }, tenantId, status: 'ENABLED' }, select: { id: true, brandCode: true } })
           if (stores.length !== storeIds.length) return { status: 400, error: '门店不存在或已停用' }
+          if (!isValidStoreBrandAssignment(newRole, stores)) return { status: 400, error: '门店岗位只能绑定同一品牌的门店' }
         }
         if (supplierId) {
           const supplier = await tx.supplier.findFirst({ where: { id: supplierId, tenantId, status: 'ENABLED' }, select: { id: true } })
@@ -260,10 +263,11 @@ export const userRoutes: FastifyPluginAsync = async (app) => {
       if (target.role === 'SUPER_ADMIN') return { status: 403, error: '不能修改超管账号' }
       const stores = await tx.store.findMany({
         where: { id: { in: storeIds }, tenantId },
-        select: { id: true, name: true, status: true },
+        select: { id: true, name: true, status: true, brandCode: true },
       })
       if (stores.length !== storeIds.length) return { status: 400, error: '门店不存在或不属于当前租户' }
       if (stores.some(s => s.status !== 'ENABLED')) return { status: 400, error: '存在已停用门店' }
+      if (!isValidStoreBrandAssignment(target.role, stores)) return { status: 400, error: '门店岗位只能绑定同一品牌的门店' }
       const oldIds = target.storeIds?.length ? target.storeIds : (target.storeId ? [target.storeId] : [])
       const added = storeIds.filter(id => !oldIds.includes(id))
       const removed = oldIds.filter(id => !storeIds.includes(id))

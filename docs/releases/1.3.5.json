@@ -1,0 +1,35 @@
+{
+  "version": "1.3.5",
+  "namedOn": "2026-11-24",
+  "previousVersion": "1.3.4",
+  "releaseId": "v1.3.5-20261124",
+  "businessReleaseId": "store-brand-transfer-20261124",
+  "status": "preparing",
+  "sourceBaselineTag": "v1.3.4-hotfix.5",
+  "tag": "v1.3.5",
+  "scope": [
+    "门店品牌归属与同品牌门店可见",
+    "店长发起同品牌门店调拨，供应链审核即完成库存移动",
+    "门店通知按店逐人投递，历史无归属广播隐藏",
+    "菜品和 BOM 仅对已关联门店可见",
+    "新门店品牌必填，现有24家滇界和3家澜苍谣迁移回填",
+    "送货单、订货单、报损单打印分别标示品牌和门店"
+  ],
+  "preserved": [
+    "账号申请内部供应链选项及审核",
+    "原账号级登录与刷新限流"
+  ],
+  "plannedMigrations": [
+    "20261124193000_store_transfer_store_initiated",
+    "20261124203000_store_transfer_brand_snapshot"
+  ],
+  "environments": {
+    "uat": {
+      "status": "preparing"
+    },
+    "production": {
+      "status": "preparing"
+    }
+  },
+  "rollbackPolicy": "保留两套环境现运行镜像和容器、迁移前业务库备份；新调拨事实产生后只回退程序到兼容新结构的已验证镜像或前向修复，不直接回滚业务数据库。"
+}

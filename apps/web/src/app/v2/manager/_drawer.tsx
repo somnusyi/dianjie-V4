@@ -3,6 +3,8 @@
  * 5 项发起入口 + 阈值前置告知文案
  */
 'use client'
+import { useEffect, useState } from 'react'
+import { getUser } from '@/lib/v2-auth'
 const ITEMS = [
   { icon: '¥', title: '录入营业额', sub: '今日 4 渠道 · 自营 + 平台券',                 href: '/v2/manager/revenue' },
   { icon: '✓', title: '券核销待办', sub: '美团 / 抖音 实时核销日记 + 平台后台快捷入口',  href: '/v2/manager/voucher-todo' },
@@ -11,6 +13,7 @@ const ITEMS = [
   { icon: '◧', title: '月度杂费',   sub: '租金 / 水电 / 人工 / 管理 · 月度录入',          href: '/v2/manager/expenses' },
   { icon: '⊞', title: '筹建/代付',  sub: '本店合同 · 申请支出 · 老板审批后由总部代付',    href: '/v2/manager/capital' },
   { icon: '🍲', title: '食材采购单', sub: '面向供应商 · 直发不审批 · 含验收报损链',  href: '/v2/manager/purchase/new' },
+  { icon: '⇄', title: '门店调拨', sub: '向同品牌门店调拨 · 供应链审核后库存即时转移', href: '/v2/manager/transfers' },
   { icon: '⎙', title: '备用金管理', sub: '申请 · 录开支 · 月末报账',              href: '/v2/manager/petty-cash' },
   { icon: '⊞', title: '报销',       sub: '垫付费用回款 · 5,000 内财务直批',         href: '/v2/manager/initiate?type=REIMBURSEMENT' },
   { icon: '⌧', title: '非食材采购', sub: '办公 / 家具 / 设备 / 餐具 · 30,000 内自动', href: '/v2/manager/initiate?type=PURCHASE_NON_FOOD' },
@@ -18,6 +21,8 @@ const ITEMS = [
 ]
 
 export default function CentralDrawer({ onClose }: { onClose: () => void }) {
+  const [role, setRole] = useState('')
+  useEffect(() => setRole(getUser()?.role || ''), [])
   return (
     <div className="fixed inset-0 z-50" onClick={onClose}>
       <div className="absolute inset-0 bg-ink/60" />
@@ -31,7 +36,7 @@ export default function CentralDrawer({ onClose }: { onClose: () => void }) {
           <span className="text-caption text-gray3">选择一项发起申请</span>
         </div>
         <ul className="mt-2 divide-y divide-border">
-          {ITEMS.map((it) => {
+          {ITEMS.filter(it => it.title !== '门店调拨' || role === 'MANAGER').map((it) => {
             const enabled = !!it.href
             const Inner = (
               <>

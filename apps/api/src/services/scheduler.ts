@@ -74,6 +74,7 @@ export async function autoDeliverStaleShipments() {
       delivered++
       notify({
         tenantId: d.tenantId, recipientRole: 'MANAGER',
+        storeId: d.purchaseOrder.storeId,
         type: 'ORDER_DELIVERED',
         title: `订单已自动送达, 请验收 ${d.purchaseOrder.no}`,
         body: `发货超 24 小时未确认送达，系统已自动推进。请门店尽快人工验收；如有异常请立即联系供应链。`,

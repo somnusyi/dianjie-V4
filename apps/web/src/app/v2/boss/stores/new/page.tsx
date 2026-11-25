@@ -8,7 +8,7 @@ import { getUser, getToken } from '@/lib/v2-auth'
 export default function NewStorePage() {
   const [u, setU] = useState<any>(null)
   const [form, setForm] = useState({
-    no: '', name: '', address: '', phone: '', managerName: '',
+    no: '', name: '', brandCode: '', address: '', phone: '', managerName: '',
     bankAccountName: '', invoiceTaxId: '', bankName: '', bankAccountNo: '',
   })
   const [submitting, setSubmitting] = useState(false)
@@ -34,8 +34,8 @@ export default function NewStorePage() {
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     setError(null)
-    if (!form.no.trim() || !form.name.trim()) {
-      return setError('门店编号和名称必填')
+    if (!form.no.trim() || !form.name.trim() || !form.brandCode) {
+      return setError('门店编号、名称和品牌必填')
     }
     // 开票信息: 4 字段要么都填要么都不填
     const anyInv = form.bankAccountName.trim() || form.invoiceTaxId.trim() || form.bankName.trim() || form.bankAccountNo.trim()
@@ -55,6 +55,7 @@ export default function NewStorePage() {
         body: JSON.stringify({
           no: form.no.trim(),
           name: form.name.trim(),
+          brandCode: form.brandCode,
           address: form.address.trim() || undefined,
           phone: form.phone.trim() || undefined,
           managerName: form.managerName.trim() || undefined,
@@ -102,6 +103,12 @@ export default function NewStorePage() {
           <input value={form.name} onChange={e => setForm({...form, name: e.target.value})}
             maxLength={40}
             className="w-full text-body bg-transparent outline-none" placeholder="翠湖店" />
+        </div>
+        <div className="bg-white rounded-card border border-border p-3">
+          <label className="text-micro text-gray3 block mb-1">所属品牌</label>
+          <select value={form.brandCode} onChange={e => setForm({ ...form, brandCode: e.target.value })} className="h-11 w-full bg-transparent text-body outline-none">
+            <option value="">请选择品牌</option><option value="DIANJIE">滇界</option><option value="LANCANGYAO">澜苍谣</option><option value="PAOPAO_ISLAND">PaoPao岛</option>
+          </select>
         </div>
         <div className="bg-white rounded-card border border-border p-3">
           <label className="text-micro text-gray3 block mb-1">地址 (选填)</label>

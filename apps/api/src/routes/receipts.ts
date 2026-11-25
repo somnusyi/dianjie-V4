@@ -809,7 +809,7 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
     const receipt = await prisma.receipt.findFirst({
       where,
       select: {
-        id: true, no: true, status: true, totalAmount: true,
+        id: true, no: true, storeId: true, status: true, totalAmount: true,
         items: {
           select: {
             id: true, productId: true, productNameSnapshot: true, productUnitSnapshot: true,
@@ -862,7 +862,7 @@ export const receiptRoutes: FastifyPluginAsync = async (app) => {
           isOverThreshold: routePlan.isOverThreshold,
           thresholdRule: routePlan.thresholdRule || null,
           payload: { ...plan, reason: parsed.data.reason } as any,
-          storeId: storeId || null,
+          storeId: receipt.storeId,
           initiatorId: userId,
           status: 'PENDING',
           steps: {

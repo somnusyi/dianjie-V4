@@ -1334,6 +1334,7 @@ model Store {
   tenantId        String
   no              String // DJ001
   name            String
+  brandCode       String? // 新门店必填；既有门店待确认归属
   address         String?
   phone           String?
   managerName     String?
@@ -6155,8 +6156,8 @@ model PageAnnotation {
   @@map("page_annotations")
 }
 
-// 门店调拨登记：PENDING -> SHIPPED -> RECEIVED；PENDING -> REVOKED。
-// 单价为创建时人工确认的库存单位价格快照，不回填或改写门店盘点快照。
+// 新调拨由门店发起，供应链审核时一次性过账两店库存：PENDING -> RECEIVED。
+// SHIPPED / PARTIALLY_RECEIVED 仅用于保留旧调拨记录及兼容处理。
 enum StoreTransferStatus {
   PENDING
   PARTIALLY_RECEIVED
@@ -6169,18 +6170,21 @@ model StoreTransfer {
   id                 String                  @id @default(cuid())
   tenantId           String
   no                 String
+  brandCode          String?                 // 创建时品牌快照；旧调拨无快照，仅后台可见
   fromStoreId        String
   toStoreId          String
   transferDate       DateTime                @db.Date
   status             StoreTransferStatus     @default(PENDING)
   note               String                  @default("")
   createdById        String
+  approvedById       String?
   shippedById        String?
   receivedById       String?
   revokedById        String?
   requestFingerprint String?                 @db.Char(64)
   requestKey         String
   createdAt          DateTime                @default(now())
+  approvedAt         DateTime?
   shippedAt          DateTime?
   receivedAt         DateTime?
   revokedAt          DateTime?
@@ -6193,6 +6197,7 @@ model StoreTransfer {
   @@unique([tenantId, no])
   @@unique([tenantId, requestKey])
   @@index([tenantId, transferDate, status])
+  @@index([tenantId, brandCode])
   @@map("store_transfers")
 }
 

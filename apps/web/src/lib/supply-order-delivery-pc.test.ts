@@ -392,7 +392,7 @@ describe('projectOrderRow', () => {
     status: 'SUBMITTED',
     createdAt: '2026-07-01T10:00:00.000Z',
     expectedDeliveryDate: '2026-07-02T00:00:00.000Z',
-    store: { id: 's1', no: 'S01', name: '门店A' },
+    store: { id: 's1', no: 'S01', name: '门店A', brandCode: 'LANCANGYAO' },
     supplier: { id: 'sup1', no: 'SUP01', name: '供应商A' },
     submittedSnapshot: {
       items: [
@@ -417,7 +417,7 @@ describe('projectOrderRow', () => {
     expect(projected.status).toBe('SUBMITTED')
     expect(projected.expectedDeliveryDate).toBe('2026-07-02T00:00:00.000Z')
     expect((projected as any).estimatedArrivalAt).toBeUndefined()
-    expect(projected.store).toEqual({ id: 's1', name: '门店A', no: 'S01' })
+    expect(projected.store).toEqual({ id: 's1', name: '门店A', no: 'S01', brandCode: 'LANCANGYAO' })
     expect(projected.supplier).toEqual({ id: 'sup1', name: '供应商A', no: 'SUP01' })
     expect(projected.submittedSnapshotItems).toHaveLength(2)
   })

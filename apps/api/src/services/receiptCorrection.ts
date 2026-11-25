@@ -172,13 +172,17 @@ export async function applyReceiptCorrection(tx: any, input: {
   userId?: string | null
   role?: string | null
   documentNo?: string | null
+  expectedStoreId?: string | null
 }) {
   const { plan, tenantId } = input
   const receipt = await tx.receipt.findFirst({
     where: { id: plan.receiptId, tenantId },
-    select: { id: true, no: true, status: true, totalAmount: true },
+    select: { id: true, no: true, storeId: true, status: true, totalAmount: true },
   })
   if (!receipt) throw new ReceiptCorrectionError('入库单不存在', 404)
+  if (input.expectedStoreId !== undefined && (!input.expectedStoreId || receipt.storeId !== input.expectedStoreId)) {
+    throw new ReceiptCorrectionError('更正单与入库门店不一致，不能审批', 403)
+  }
   if (!CORRECTABLE_RECEIPT_STATUSES.includes(receipt.status as any)) {
     throw new ReceiptCorrectionError(`入库单 ${receipt.no} 状态已变为 ${receipt.status}，更正未生效`, 409)
   }

@@ -1,6 +1,7 @@
 import React from 'react'
 import dayjs from '@/lib/business-dayjs'
 import { sortDeliveryNoteItems, type DeliveryProduct } from '@/lib/delivery-note-layout'
+import { storePrintIdentity } from '@/lib/store-print-identity'
 
 type PaperItem = {
   id: string; quantity: string; shippedQty: string | null; unitPrice: string; amount: string
@@ -11,7 +12,7 @@ export type DeliveryNotePaperOrder = {
   no: string; documentCreatedAt?: string; purchaseOrderNo?: string; createdAt: string; expectedDate: string; shippedAt: string | null
   note: string | null; shippedNote: string | null
   supplier: { name: string; contactName?: string | null; contactPhone?: string | null }
-  store: { name: string; address?: string | null; managerName?: string | null; phone?: string | null }
+  store: { name: string; no?: string | null; brandCode?: string | null; address?: string | null; managerName?: string | null; phone?: string | null }
   consignee?: { name?: string | null; phone?: string | null }
   createdBy: { name: string }
   items: PaperItem[]
@@ -33,6 +34,7 @@ export function DeliveryNotePaper({ order, members, categories = [], printedAt }
   )))
   const contact = [order.supplier.contactName, order.supplier.contactPhone].filter(Boolean).join(' · ') || '—'
   const consignee = [order.consignee?.name ?? order.store.managerName, order.consignee?.phone ?? order.store.phone].filter(Boolean).join(' · ') || '—'
+  const storeIdentity = storePrintIdentity(order.store)
   return <div id="print-area" data-delivery-note-print className="print-page mx-auto my-6 bg-white shadow-md"
     style={{ width: '210mm', minHeight: '297mm', padding: '12mm' }}>
     <section data-delivery-note-header>
@@ -44,7 +46,8 @@ export function DeliveryNotePaper({ order, members, categories = [], printedAt }
         )}</div>
       </div>
       <div data-delivery-note-parties>
-        <div>收货方：{order.store.name}</div><div className="delivery-contact">供货方联系人：{contact}</div>
+        <div>收货方：{storeIdentity.fullName}</div><div className="delivery-contact">供货方联系人：{contact}</div>
+        <div>品牌：{storeIdentity.brand} · 门店：{storeIdentity.branch}</div><div>门店编号：{storeIdentity.no}</div>
         <div className="delivery-contact">收货人：{consignee}</div><div>下单人：{order.createdBy?.name || '—'}</div>
         <div>期望到货：{dayjs(order.expectedDate).format('YYYY-MM-DD')}</div>
         <div>发货时间：{order.shippedAt ? dayjs(order.shippedAt).format('YYYY-MM-DD HH:mm') : '—'}</div>

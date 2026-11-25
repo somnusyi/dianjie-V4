@@ -17,6 +17,7 @@ type StoreLifecyclePhase =
 type FormState = {
   no: string
   name: string
+  brandCode: string
   address: string
   phone: string
   managerName: string
@@ -41,6 +42,7 @@ const lifecycleOptions: Array<{ value: StoreLifecyclePhase; label: string }> = [
 const initialForm: FormState = {
   no: '',
   name: '',
+  brandCode: '',
   address: '',
   phone: '',
   managerName: '',
@@ -74,8 +76,8 @@ export default function FinanceNewStorePage() {
     event.preventDefault()
     setError(null)
 
-    if (!form.no.trim() || !form.name.trim()) {
-      setError('门店编号和门店名称为必填项')
+    if (!form.no.trim() || !form.name.trim() || !form.brandCode) {
+      setError('门店编号、门店名称和品牌为必填项')
       return
     }
 
@@ -100,6 +102,7 @@ export default function FinanceNewStorePage() {
         body: JSON.stringify({
           no: form.no.trim().toUpperCase(),
           name: form.name.trim(),
+          brandCode: form.brandCode,
           address: form.address.trim() || undefined,
           phone: form.phone.trim() || undefined,
           managerName: form.managerName.trim() || undefined,
@@ -162,6 +165,11 @@ export default function FinanceNewStorePage() {
               <Field label="门店名称 *">
                 <input value={form.name} onChange={e => update('name', e.target.value)}
                   maxLength={80} placeholder="例：合肥政务区店" className="input-control" />
+              </Field>
+              <Field label="所属品牌 *">
+                <select value={form.brandCode} onChange={e => update('brandCode', e.target.value)} className="input-control">
+                  <option value="">请选择品牌</option><option value="DIANJIE">滇界</option><option value="LANCANGYAO">澜苍谣</option><option value="PAOPAO_ISLAND">PaoPao岛</option>
+                </select>
               </Field>
               <Field label="门店地址">
                 <input value={form.address} onChange={e => update('address', e.target.value)}

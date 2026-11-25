@@ -21,7 +21,7 @@ export default function StoresPage() {
   const [loading, setLoading] = useState(true)
   const [user, setUser] = useState<any>(null)
   const [createOpen, setCreateOpen] = useState(false)
-  const [form, setForm] = useState({ no: '', name: '', address: '', phone: '', managerName: '' })
+  const [form, setForm] = useState({ no: '', name: '', brandCode: '', address: '', phone: '', managerName: '' })
   const { show, ToastEl } = useToast()
 
   useEffect(() => {
@@ -40,12 +40,12 @@ export default function StoresPage() {
   }
 
   const createStore = async () => {
-    if (!form.no || !form.name) return show('请填写门店编号和名称', 'error')
+    if (!form.no || !form.name || !form.brandCode) return show('请填写门店编号、名称并选择品牌', 'error')
     try {
       await api.post('/api/stores', form)
       show('门店创建成功')
       setCreateOpen(false)
-      setForm({ no: '', name: '', address: '', phone: '', managerName: '' })
+      setForm({ no: '', name: '', brandCode: '', address: '', phone: '', managerName: '' })
       load()
     } catch (e: any) { show(e.response?.data?.error || '创建失败', 'error') }
   }
@@ -206,6 +206,7 @@ export default function StoresPage() {
         <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12 }}>
           <Field label="门店编号" required><Input value={form.no} onChange={v => setForm({ ...form, no: v })} placeholder="如 DJ004" /></Field>
           <Field label="门店名称" required><Input value={form.name} onChange={v => setForm({ ...form, name: v })} placeholder="如 滇界·西双版纳店" /></Field>
+          <Field label="所属品牌" required><select value={form.brandCode} onChange={e => setForm({ ...form, brandCode: e.target.value })} className="w-full rounded border border-gray-300 p-2"><option value="">请选择品牌</option><option value="DIANJIE">滇界</option><option value="LANCANGYAO">澜苍谣</option><option value="PAOPAO_ISLAND">PaoPao岛</option></select></Field>
           <Field label="店长姓名"><Input value={form.managerName} onChange={v => setForm({ ...form, managerName: v })} /></Field>
           <Field label="联系电话"><Input value={form.phone} onChange={v => setForm({ ...form, phone: v })} /></Field>
         </div>

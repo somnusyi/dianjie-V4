@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { isSupplierRole } from './auth-scope'
+import { isStoreBrandRole } from './store-brand-assignment'
 
 export function permissionStamp(user:any) {
  return createHash('sha256').update(JSON.stringify({ver:user.ver,role:user.role,storeId:user.storeId||null,storeIds:[...(user.storeIds||[])].sort(),supplierId:user.supplierId||null,supplierBusinessScopes:[...(user.supplierBusinessScopes||[])].sort()})).digest('hex')
@@ -19,7 +20,14 @@ export function createAuthenticate(prisma:any) {
    const jtis=[claims.jti,...(typeof claims.sid==='string'&&claims.sid?[claims.sid]:[])]
    if(await prisma.revokedToken.findFirst({where:{jti:{in:jtis}}}))return reply.status(401).send({error:'会话已退出，请先登录'})
    // Store assignments can change independently of role/version. Never trust old scope claims.
-   request.user={...claims,storeId:principal.storeId||null,storeIds:principal.storeIds?.length?principal.storeIds:principal.storeId?[principal.storeId]:[],supplierId:principal.supplierId||null,supplierBusinessScopes:principal.supplier?.businessScopes||[]}
+   const assignedIds:string[]=principal.storeIds?.length?principal.storeIds:principal.storeId?[principal.storeId]:[]
+   let storeIds=assignedIds
+   if(isStoreBrandRole(principal.role)&&assignedIds.length>1){
+    const assigned=await prisma.store.findMany({where:{tenantId:principal.tenantId,id:{in:assignedIds},status:'ENABLED'},select:{id:true,brandCode:true}})
+    const primary=assigned.find((store:any)=>store.id===principal.storeId)||assigned.find((store:any)=>store.id===assignedIds[0])
+    storeIds=primary?assignedIds.filter(id=>assigned.some((store:any)=>store.id===id&&store.brandCode===primary.brandCode&&(primary.brandCode!==null||store.id===primary.id))):[]
+   }
+   request.user={...claims,storeId:isStoreBrandRole(principal.role)?storeIds[0]||null:principal.storeId||null,storeIds,supplierId:principal.supplierId||null,supplierBusinessScopes:principal.supplier?.businessScopes||[]}
    verified.add(request)
   }catch{return reply.status(503).send({error:'认证服务暂时不可用，请稍后重试'})}
  }

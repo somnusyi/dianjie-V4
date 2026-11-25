@@ -26,6 +26,7 @@ import { prepareDeliveryNotePrint } from '@/lib/delivery-note-print'
 import { deliveryNoteStyles, waitForDeliveryNoteFonts, type DeliveryProduct } from '@/lib/delivery-note-layout'
 import { renderDeliveryNotePdf } from '@/lib/delivery-note-pdf'
 import { DeliveryNotePaper } from '@/components/v2/delivery-note-paper'
+import { storePrintIdentity } from '@/lib/store-print-identity'
 
 
 type Order = {
@@ -39,7 +40,7 @@ type Order = {
   shippedAt: string | null
   shippedNote: string | null
   note: string | null
-  store: { id: string; name: string; no: string; address?: string | null
+  store: { id: string; name: string; no: string; brandCode?: string | null; address?: string | null
            managerName?: string | null; phone?: string | null }
   consignee?: { name?: string | null; phone?: string | null }  // 收货人 = 门店指定(厨师长), 后端已回退店长
   supplier: { id: string; name: string; contactName?: string | null; contactPhone?: string | null }
@@ -470,6 +471,7 @@ function normalizeOperationGroup(data: OperationGroupResponse): NormalizedOperat
     id: firstStore.id || data.group.storeId,
     name: firstStore.name || '—',
     no: firstStore.no || '',
+    brandCode: firstStore.brandCode || null,
     address: firstStore.address || null,
     managerName: firstStore.managerName || null,
     phone: firstStore.phone || null,
@@ -722,6 +724,7 @@ export default function DeliveryNotePrintPage() {
     try {
       const latestDocument = await refreshBeforeDocumentAction()
       const exportOrder = latestDocument.order
+      const printStore = storePrintIdentity(exportOrder.store)
       const exportGroupMembers = latestDocument.members
       const XLSX = await import('xlsx')
       const itemQtyLocal = (i: Order['items'][number]) => i.shippedQty != null ? Number(i.shippedQty) : Number(i.quantity)
@@ -740,6 +743,8 @@ export default function DeliveryNotePrintPage() {
         [`送货单 · ${documentLabel}`, '', '', '', '', '', '', ''],
         [],
         ['供应商', exportOrder.supplier.name, '', '', '收货方', exportOrder.store.name, '', ''],
+        ['品牌', printStore.brand, '', '', '门店', printStore.branch, '', ''],
+        ['门店编号', printStore.no, '', '', '', '', '', ''],
         ['供应方联系人', `${exportOrder.supplier.contactName || '—'}${exportOrder.supplier.contactPhone ? ' · ' + exportOrder.supplier.contactPhone : ''}`, '', '', '收货人', `${(exportOrder.consignee?.name ?? exportOrder.store.managerName) || '—'}${(exportOrder.consignee?.phone ?? exportOrder.store.phone) ? ' · ' + (exportOrder.consignee?.phone ?? exportOrder.store.phone) : ''}`, '', ''],
         ['收货地址', exportOrder.store.address || '—', '', '', '', '', '', ''],
         ...(isOperationGroup && exportGroupMembers && exportGroupMembers.length > 0

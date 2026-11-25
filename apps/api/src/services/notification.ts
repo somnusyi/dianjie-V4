@@ -1,9 +1,11 @@
 import { Prisma, prisma } from '@dianjie/db'
+import { isStoreScoped } from '../lib/auth-scope'
 
 interface NotifyPayload {
   tenantId: string
   recipientRole: string          // 目标角色
   recipientId?: string           // 指定用户（可选）
+  storeId?: string               // 门店通知必须指定目标门店
   type: string                   // 通知类型
   title: string
   body: string
@@ -24,10 +26,33 @@ interface NotifyPayload {
  * 2. 控制台日志
  * 3. 企业微信 Webhook（配置后生效）
  */
-export async function sendNotification(payload: NotifyPayload) {
+export async function sendNotification(payload: NotifyPayload): Promise<{ created: boolean; duplicated: boolean; skipped?: boolean }> {
   const {
-    tenantId, recipientRole, recipientId, type, title, body, refType, refId, dedupeKey, skipExternal,
+    tenantId, recipientRole, recipientId, storeId, type, title, body, refType, refId, dedupeKey, skipExternal,
   } = payload
+
+  // Historical role broadcasts have no store identity. Never create another
+  // tenant-wide store-role notification; deliver only to users bound to this store.
+  if (isStoreScoped(recipientRole) && !recipientId) {
+    if (!storeId) {
+      console.error(`门店通知缺少 storeId，已拒绝投递: ${type}`)
+      return { created: false, duplicated: false, skipped: true }
+    }
+    const recipients = await prisma.user.findMany({
+      where: {
+        tenantId, role: recipientRole as any, status: 'ACTIVE',
+        OR: [{ storeIds: { has: storeId } }, { storeIds: { isEmpty: true }, storeId }],
+      },
+      select: { id: true },
+    })
+    const results = await Promise.all(recipients.map(recipient => sendNotification({
+      ...payload,
+      recipientId: recipient.id,
+      dedupeKey: dedupeKey ? `${dedupeKey}:${recipient.id}` : undefined,
+      skipExternal: true,
+    })))
+    return { created: results.some(result => result.created), duplicated: false, skipped: recipients.length === 0 }
+  }
 
   // 1. 写入 DB
   let created = false
@@ -108,7 +133,7 @@ export function notifyOrderSubmitted(tenantId: string, orderNo: string, storeNam
 export async function notifyOrderConfirmed(tenantId: string, orderNo: string, supplierName: string, storeId: string) {
   for (const role of ['MANAGER', 'KITCHEN_LEAD']) {
     await sendNotification({
-      tenantId, recipientRole: role,
+      tenantId, recipientRole: role, storeId,
       type: 'ORDER_CONFIRMED',
       title: '供应商已接单',
       body: `${supplierName} 已接单 ${orderNo}, 等待发货`,
@@ -121,7 +146,7 @@ export async function notifyOrderConfirmed(tenantId: string, orderNo: string, su
 export async function notifyOrderRejected(tenantId: string, orderNo: string, supplierName: string, reason: string, storeId: string) {
   for (const role of ['MANAGER', 'KITCHEN_LEAD']) {
     await sendNotification({
-      tenantId, recipientRole: role,
+      tenantId, recipientRole: role, storeId,
       type: 'ORDER_REJECTED',
       title: '⚠ 供应商拒单',
       body: `${supplierName} 拒绝了 ${orderNo}: ${reason}. 请改换供应商或调整下单内容.`,
@@ -172,11 +197,12 @@ export function notifyReceiptConfirmed(
   })
 }
 
-export function notifyLossClaimResult(tenantId: string, claimNo: string, action: 'approve' | 'reject', amount: number) {
+export function notifyLossClaimResult(tenantId: string, claimNo: string, action: 'approve' | 'reject', amount: number, storeId: string) {
   const label = action === 'approve' ? '已确认' : '已提出异议'
   return sendNotification({
     tenantId,
     recipientRole: 'MANAGER',
+    storeId,
     type: 'LOSS_CLAIM_RESULT',
     title: `到货差异${label}`,
     body: `供应商${label}到货差异 ${claimNo}，涉及 ¥${amount.toLocaleString()}`,

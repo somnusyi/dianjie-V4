@@ -344,7 +344,7 @@ export function projectOrderRow(row: any) {
         status: delivery.status,
       }))
       : [],
-    store: row.store ? { id: row.store.id, name: row.store.name, no: row.store.no } : null,
+    store: row.store ? { id: row.store.id, name: row.store.name, no: row.store.no, brandCode: row.store.brandCode ?? null } : null,
     supplier: row.supplier ? { id: row.supplier.id, name: row.supplier.name, no: row.supplier.no } : null,
     submittedSnapshotItems,
     items: Array.isArray(row.items) ? row.items.map(projectDocumentItem) : [],

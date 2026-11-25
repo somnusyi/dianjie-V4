@@ -13,6 +13,7 @@ import {
   printableEvidenceImages,
 } from '@/lib/loss-claim-print'
 import { notifyUser } from '@/lib/ui-dialogs'
+import { storePrintIdentity } from '@/lib/store-print-identity'
 
 
 type LossClaimDetail = {
@@ -34,7 +35,7 @@ type LossClaimDetail = {
   handledAt?: string | null
   resolvedAt?: string | null
   tenant: { name: string; logo?: string | null }
-  store: { no: string; name: string; address?: string | null; phone?: string | null }
+  store: { no: string; name: string; brandCode?: string | null; address?: string | null; phone?: string | null }
   supplier?: { no: string; name: string; contactName?: string | null; contactPhone?: string | null } | null
   purchaseOrder?: { id: string; no: string; createdAt: string } | null
   deliveryOrder?: { id: string; no: string; shippedAt?: string | null; receivedAt?: string | null } | null
@@ -178,6 +179,8 @@ export default function LossClaimPrintPage() {
     return <main className="min-h-screen bg-bg p-8 text-center text-caption text-gray3">正在生成报损详情…</main>
   }
 
+  const printStore = storePrintIdentity(claim.store)
+
   return (
     <main className="print-shell min-h-screen bg-[#e9e7e1] py-5 px-3 text-[#111]">
       <div className="print-actions max-w-[210mm] mx-auto mb-3 flex items-center gap-2 flex-wrap">
@@ -210,7 +213,7 @@ export default function LossClaimPrintPage() {
       <div id="loss-claim-print-area" className="space-y-5">
         <article className={`paper pdf-page report-page mx-auto bg-white shadow-sm ${arrivalDifference ? 'arrival-difference-report' : 'manual-loss-report'}`}>
           <header className="doc-header">
-            {claim.isManual && <p className="brand">{claim.tenant.name}</p>}
+            {claim.isManual && <p className="brand">{printStore.brand}</p>}
             <h1>{claim.store.name}{claim.isManual ? ' · 内部报损单' : '到货差异单'}</h1>
             {claim.isManual && <p className="subtitle">{KIND_LABEL[claim.kind] || '店内自有损耗'}</p>}
           </header>
@@ -220,6 +223,8 @@ export default function LossClaimPrintPage() {
             <Info label="单据状态" value={STATUS_LABEL[claim.status] || claim.status} />
             <Info label="制单日期" value={dayjs(claim.createdAt).format('YYYY-MM-DD HH:mm:ss')} />
             <Info label="门店编码" value={claim.store.no} />
+            <Info label="所属品牌" value={printStore.brand} />
+            <Info label="具体门店" value={printStore.branch} />
             <Info label="关联订货单" value={claim.purchaseOrder?.no || '—'} />
             <Info label="关联配送单" value={claim.deliveryOrder?.no || '—'} />
             <Info label="关联收货单" value={claim.receipt?.no || '—'} />

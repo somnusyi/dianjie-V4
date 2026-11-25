@@ -71,8 +71,8 @@ function setupFetch(count = makeCount()) {
     const url = String(path)
     if (url === '/api/warehouse-stocktakes/options') return Promise.resolve(options)
     if (url === '/api/warehouse-stocktake-selection/preview' && init?.method === 'POST') return Promise.resolve(previewFor(String(init.body)))
-    if (url === '/api/warehouse-stocktakes?page=1&pageSize=200&documentType=MULTI' || url === '/api/warehouse-stocktakes?page=1&pageSize=200&documentType=FORMAL') {
-      return Promise.resolve({ rows: [{ id: count.id, no: count.no, status: count.status, warehouse: count.warehouse }] })
+    if (url.startsWith('/api/warehouse-stocktakes?page=1&pageSize=50&documentType=')) {
+      return Promise.resolve({ rows: [{ id: count.id, no: count.no, status: count.status, warehouse: count.warehouse }], total: 1 })
     }
     if (url === `/api/warehouse-stocktakes/${count.id}`) return Promise.resolve(count)
     if (url === `/api/warehouse-stocktakes/${count.id}/sections/section-own` && init?.method === 'PUT') return Promise.resolve({ ok: true })
@@ -343,8 +343,8 @@ describe('总仓盘点作业', () => {
     expect(body.sections.map((section: any) => section.productIds)).toEqual([['product-1'], ['product-2']])
     act(() => root.unmount())
   })
-  it('搜索土豆后全选只选择搜索结果，不选择隐藏商品', async () => {
-    const products = ['土豆', '白菜', '萝卜'].map((name, index) => ({ id: `p${index}`, code: `P${index}`, name, category: '蔬菜类', inventoryUnit: 'kg', unit: 'kg' }))
+  it('按名称或规格搜索后全选只选择搜索结果，不选择隐藏商品', async () => {
+    const products = ['土豆', '白菜', '萝卜'].map((name, index) => ({ id: `p${index}`, code: `P${index}`, name, spec: index === 1 ? '10kg/袋' : '散装', category: '蔬菜类', inventoryUnit: 'kg', unit: 'kg' }))
     const count = makeCount()
     mockFetch.mockImplementation(async (path, init) => {
       if (path === '/api/warehouse-stocktakes/options') return { ...options, products } as any
@@ -367,11 +367,41 @@ describe('总仓盘点作业', () => {
     expect(container.textContent).toContain('已选择 1 项')
     act(() => category.click())
     expect(container.textContent).toContain('已选择 0 项')
-    act(() => category.click())
+    change(search, '10kg/袋')
+    const specificationCategory = Array.from(container.querySelectorAll('label')).find(label => label.textContent?.includes('全选搜索结果：蔬菜类'))!.querySelector('input')!
+    act(() => specificationCategory.click())
     await act(async () => button(container, '保存子单草稿')!.click())
     const call = mockFetch.mock.calls.find(([path, init]) => path === '/api/warehouse-stocktakes' && init?.method === 'POST')!
-    expect(JSON.parse(String(call[1]?.body)).sections[0].productIds).toEqual(['p0'])
+    expect(JSON.parse(String(call[1]?.body)).sections[0].productIds).toEqual(['p1'])
     act(() => root.unmount())
+  })
+
+  it('服务端搜索全部盘点单、支持分页并忽略过期搜索响应', async () => {
+    const count = makeCount()
+    let resolveOld: ((value: any) => void) | null = null
+    const oldSearch = new Promise(resolve => { resolveOld = resolve })
+    setupFetch(count)
+    const original = mockFetch.getMockImplementation()!
+    mockFetch.mockImplementation((path, init) => {
+      const url = String(path)
+      if (url.includes('q=%E6%97%A7%E5%8D%95')) return oldSearch
+      if (url.includes('page=2') && url.includes('q=%E6%96%B0%E5%8D%95')) return Promise.resolve({ rows: [{ id: 'new-count-2', no: '新单第二页', status: 'DRAFT', warehouse: count.warehouse }], total: 51 })
+      if (url.includes('q=%E6%96%B0%E5%8D%95')) return Promise.resolve({ rows: [{ id: 'new-count', no: '新单命中', status: 'DRAFT', warehouse: count.warehouse }], total: 51 })
+      return original(path, init)
+    })
+    const page = renderPage()
+    await waitFor(() => page.container.textContent?.includes(count.no) ?? false)
+    const search = page.container.querySelector('[aria-label="搜索盘点单"]') as HTMLInputElement
+    change(search, '旧单')
+    await act(async () => { await new Promise(resolve => setTimeout(resolve, 300)) })
+    change(search, '新单')
+    await waitFor(() => page.container.textContent?.includes('新单命中') ?? false)
+    await act(async () => resolveOld?.({ rows: [{ id: 'old-count', no: '过期旧单', status: 'DRAFT', warehouse: count.warehouse }], total: 1 }))
+    expect(page.container.textContent).not.toContain('过期旧单')
+    expect(page.container.textContent).toContain('共 51 张')
+    act(() => button(page.container, '下一页')!.click())
+    await waitFor(() => page.container.textContent?.includes('新单第二页') ?? false)
+    act(() => page.root.unmount())
   })
 
   it('单人指定盘点只选一个菌菇即可保存，空选择不会发创建请求', async () => {
@@ -809,14 +839,15 @@ describe('总仓盘点作业', () => {
     let resolveFirst!: (value: any) => void
     mockFetch.mockImplementation(async path => {
       if (path === '/api/warehouse-stocktakes/options') return options as any
-      if (String(path).includes('?page=')) return { rows: [first, second].map(count => ({ id: count.id, no: count.no, status: count.status, warehouse: count.warehouse })) } as any
+      if (String(path).includes('?page=')) return { rows: [first, second].map(count => ({ id: count.id, no: count.no, status: count.status, warehouse: count.warehouse })), total: 2 } as any
       if (String(path).endsWith('/count-1')) return new Promise(resolve => { resolveFirst = resolve })
       if (String(path).endsWith('/count-2')) return second
       throw new Error('unexpected')
     })
     const page = renderPage()
     await waitFor(() => !!resolveFirst)
-    const select = page.container.querySelector('select')!
+    await waitFor(() => Array.from((page.container.querySelector('[aria-label="选择盘点单"]') as HTMLSelectElement).options).some(option => option.value === 'count-2'))
+    const select = page.container.querySelector('[aria-label="选择盘点单"]') as HTMLSelectElement
     act(() => { select.value = 'count-2'; select.dispatchEvent(new Event('change', { bubbles: true })) })
     await waitFor(() => page.container.querySelector('h2')?.textContent?.includes('最新选择单') ?? false)
     await act(async () => resolveFirst(first))
@@ -990,10 +1021,10 @@ describe('总仓盘点作业', () => {
     mockFetch.mockImplementation((path) => {
       const url = String(path)
       if (url === '/api/warehouse-stocktakes/options') return Promise.resolve(options)
-      if (url.includes('page=1&pageSize=200')) return Promise.resolve({ rows: [
+      if (url.includes('page=1&pageSize=50')) return Promise.resolve({ rows: [
         { id: first.id, no: first.no, status: first.status, warehouse: first.warehouse },
         { id: second.id, no: second.no, status: second.status, warehouse: second.warehouse },
-      ] })
+      ], total: 2 })
       if (url === `/api/warehouse-stocktakes/${first.id}`) return Promise.resolve(first)
       if (url === `/api/warehouse-stocktakes/${second.id}`) return Promise.resolve(second)
       if (url === `/api/warehouse-stocktakes/${first.id}/logs`) return firstLogs
@@ -1006,12 +1037,13 @@ describe('总仓盘点作业', () => {
     act(() => button(page.container, '加载操作日志')!.click())
     await waitFor(() => mockFetch.mock.calls.some(([url]) => String(url) === `/api/warehouse-stocktakes/${first.id}/logs`))
 
-    const select = Array.from(page.container.querySelectorAll('select')).find(node => node.value === first.id) as HTMLSelectElement
+    const select = page.container.querySelector('[aria-label="选择盘点单"]') as HTMLSelectElement
+    await waitFor(() => Array.from(select.options).some(option => option.value === second.id))
     act(() => {
       Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set?.call(select, second.id)
       select.dispatchEvent(new Event('change', { bubbles: true }))
     })
-    await waitFor(() => page.container.textContent?.includes(second.no) ?? false)
+    await waitFor(() => page.container.querySelector('h2')?.textContent?.includes(second.no) ?? false)
     await act(async () => resolveFirstLogs?.({
       items: [{ id: 'log-a', action: 'A单旧日志', actor: '盘点员甲', actorId: 'user-1', createdAt: new Date().toISOString(), metadata: null }],
       hasMore: false,

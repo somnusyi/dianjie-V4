@@ -13,7 +13,7 @@ import { apiFetch } from '@/lib/v2-auth'
 const mockFetch = vi.mocked(apiFetch)
 const count = {
   no: 'PD20260924001', countDate: '2026-09-24', status: 'REVIEWING', totalDifferenceValue: -38,
-  store: { name: '复盘门店' },
+  warehouse: { name: '复盘仓库' },
   items: [
     { id: 'difference', productCodeSnapshot: 'A-01', productNameSnapshot: '有差异商品', productSpecSnapshot: '500g', unitSnapshot: '袋', bookQuantity: 10, countedQuantity: 8, differenceQuantity: -2, differenceAmount: -20, reasonCode: 'WEIGHING', reasonNote: '秤已复核', evidenceKeys: ['key-1', 'key-2'], evidenceUrls: [] },
     { id: 'zero', productCodeSnapshot: 'B-02', productNameSnapshot: '零差异商品', productSpecSnapshot: null, unitSnapshot: '件', bookQuantity: 5, countedQuantity: 5, differenceQuantity: 0, differenceAmount: 0, reasonCode: null, reasonNote: null, evidenceKeys: [], evidenceUrls: [] },
@@ -89,6 +89,8 @@ describe('stocktake review print page', () => {
     expect(container.querySelector('a[href="/v2/supply-chain/stocktake/count"]')?.textContent).toBe('返回盘点管理')
 
     const paper = document.body.querySelector('[data-stocktake-print]')
+    expect(paper?.textContent).toContain('仓库：复盘仓库')
+    expect(paper?.textContent).not.toContain('门店：复盘仓库')
     expect(paper?.textContent).toContain('打印范围：仅已盘且有差异（1 项）')
     expect(paper?.textContent).toContain('有差异商品')
     expect(paper?.textContent).not.toContain('零差异商品')

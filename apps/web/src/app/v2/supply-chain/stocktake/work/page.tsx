@@ -115,6 +115,7 @@ type Count = {
   totalDifferenceValue: string;
 };
 type StocktakeLog = { id: string; action: string; actor: string; actorId: string | null; createdAt: string; metadata: unknown };
+type StocktakeRow = { id: string; no: string; status: string; warehouse: Option };
 const additionSourceLabel: Record<Item["additionSource"], string> = {
   LEGACY: "历史数据", SYSTEM: "系统圈定", PLAN: "盘点方案", RECOUNT: "复盘补充", MANUAL: "手工添加", MERGED: "多人汇总",
 };
@@ -192,9 +193,12 @@ export default function WarehouseStocktakeWorkPage() {
     products: Product[];
     plans: Plan[];
   }>({ warehouses: [], users: [], products: [], plans: [] });
-  const [rows, setRows] = useState<
-    Array<{ id: string; no: string; status: string; warehouse: Option }>
-  >([]);
+  const [rows, setRows] = useState<StocktakeRow[]>([]);
+  const [stocktakeQuery, setStocktakeQuery] = useState("");
+  const [stocktakePage, setStocktakePage] = useState(1);
+  const [stocktakeTotal, setStocktakeTotal] = useState(0);
+  const [stocktakeListLoading, setStocktakeListLoading] = useState(false);
+  const stocktakeListSequence = useRef(0);
   const [count, setCount] = useState<Count | null>(null);
   const [logs, setLogs] = useState<StocktakeLog[]>([]);
   const [logsLoaded, setLogsLoaded] = useState(false);
@@ -319,6 +323,42 @@ export default function WarehouseStocktakeWorkPage() {
     };
   }, [creating, hasUnsavedEntries, busy, resultUnknown, openConfirm]);
 
+  function stocktakeDocumentType() {
+    return returnPage === "multi-count" ? "MULTI" : "FORMAL";
+  }
+
+  async function loadStocktakeRows(query = stocktakeQuery, page = stocktakePage) {
+    const sequence = ++stocktakeListSequence.current;
+    setStocktakeListLoading(true);
+    try {
+      const params = new URLSearchParams({
+        page: String(page), pageSize: "50", documentType: stocktakeDocumentType(),
+      });
+      if (query.trim()) params.set("q", query.trim());
+      const result = await apiFetch<{ rows: StocktakeRow[]; total: number }>(
+        `/api/warehouse-stocktakes?${params.toString()}`
+      );
+      if (sequence !== stocktakeListSequence.current) return;
+      setRows(result.rows);
+      setStocktakeTotal(result.total);
+    } catch (reason) {
+      if (sequence !== stocktakeListSequence.current) return;
+      throw reason;
+    } finally {
+      if (sequence === stocktakeListSequence.current) setStocktakeListLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => {
+      void loadStocktakeRows().catch((reason) => setError(reason.message));
+    }, 250);
+    return () => {
+      window.clearTimeout(timer);
+      ++stocktakeListSequence.current;
+    };
+  }, [stocktakeQuery, stocktakePage, returnPage]);
+
   async function load(id?: string, savedSectionId?: string) {
     currentLogStocktakeId.current = id || "";
     ++logsSequence.current;
@@ -335,11 +375,6 @@ export default function WarehouseStocktakeWorkPage() {
         "multi-count"
           ? "MULTI"
           : "FORMAL";
-      const list = await apiFetch<{ rows: typeof rows }>(
-        `/api/warehouse-stocktakes?page=1&pageSize=200&documentType=${documentType}`
-      );
-      if (sequence !== loadSequence.current) return;
-      setRows(list.rows);
       if (!id) return;
       const detail = await apiFetch<Count>(`/api/warehouse-stocktakes/${id}`);
       if (sequence !== loadSequence.current) return;
@@ -351,6 +386,9 @@ export default function WarehouseStocktakeWorkPage() {
       )
         throw new Error("盘点单类型与当前页面不一致，请从正确列表打开");
       setCount(detail);
+      setRows((current) => current.some((row) => row.id === detail.id)
+        ? current.map((row) => row.id === detail.id ? { id: detail.id, no: detail.no, status: detail.status, warehouse: detail.warehouse } : row)
+        : current);
       setHeaderDate(String(detail.countDate || "").slice(0, 10));
       setHeaderNote(detail.note || "");
       const nextEntries = Object.fromEntries(
@@ -1604,7 +1642,7 @@ export default function WarehouseStocktakeWorkPage() {
                     const categoryProducts = options.products.filter(
                       (product) =>
                         (product.category || "未分类") === category &&
-                        `${product.code} ${product.name}`
+                        `${product.code} ${product.name} ${product.spec || ""}`
                           .toLowerCase()
                           .includes(query.toLowerCase())
                     );
@@ -1713,9 +1751,17 @@ export default function WarehouseStocktakeWorkPage() {
       )}
       <label className="block">
         选择盘点单
-        <SearchableSelect
-          searchWhenLong
-          searchLabel="搜索盘点单"
+        <input
+          type="search"
+          aria-label="搜索盘点单"
+          placeholder="输入盘点单号 / 备注搜索全部盘点单"
+          className={field}
+          value={stocktakeQuery}
+          disabled={busy || resultUnknown}
+          onChange={(event) => { setStocktakeQuery(event.target.value); setStocktakePage(1); }}
+        />
+        <select
+          aria-label="选择盘点单"
           className={field}
           value={count?.id || ""}
           disabled={busy || resultUnknown}
@@ -1734,12 +1780,23 @@ export default function WarehouseStocktakeWorkPage() {
           }}
         >
           <option value="">请选择</option>
+          {count && !rows.some((row) => row.id === count.id) && <option value={count.id}>
+            {count.no} · {count.warehouse.name} · {labels[count.status]}
+          </option>}
           {rows.map((row) => (
             <option key={row.id} value={row.id}>
               {row.no} · {row.warehouse.name} · {labels[row.status]}
             </option>
           ))}
-        </SearchableSelect>
+        </select>
+        <span className="mt-1 flex items-center justify-between text-caption text-gray3">
+          <span>{stocktakeListLoading ? "正在搜索…" : `共 ${stocktakeTotal} 张`}</span>
+          <span className="flex items-center gap-2">
+            <button type="button" disabled={stocktakeListLoading || stocktakePage <= 1} onClick={() => setStocktakePage((page) => page - 1)}>上一页</button>
+            <span>{stocktakePage} / {Math.max(1, Math.ceil(stocktakeTotal / 50))}</span>
+            <button type="button" disabled={stocktakeListLoading || stocktakePage * 50 >= stocktakeTotal} onClick={() => setStocktakePage((page) => page + 1)}>下一页</button>
+          </span>
+        </span>
       </label>
       {count && (
         <section className="space-y-4">

@@ -121,6 +121,8 @@ export type DeliveryFilters = {
   keyword: string
   storeId: string
   status: DeliveryStatus | ''
+  sort: 'DATE_DESC' | 'STORE_NAME_ASC' | 'STORE_NAME_DESC'
+  dateField: 'ORDERED' | 'DELIVERY_CREATED' | 'SHIPPED'
   dateFrom: string
   dateTo: string
   page: number
@@ -131,6 +133,8 @@ export const DEFAULT_DELIVERY_FILTERS: DeliveryFilters = {
   keyword: '',
   storeId: '',
   status: '',
+  sort: 'DATE_DESC',
+  dateField: 'ORDERED',
   dateFrom: '',
   dateTo: '',
   page: 1,
@@ -151,6 +155,8 @@ export function buildDeliveryQuery(filters: Partial<DeliveryFilters>): string {
   if (kw) params.set('keyword', kw)
   if (filters.storeId) params.set('storeId', filters.storeId)
   if (filters.status && isDeliveryStatus(filters.status)) params.set('status', filters.status)
+  if (filters.sort && filters.sort !== DEFAULT_DELIVERY_FILTERS.sort) params.set('sort', filters.sort)
+  if (filters.dateField && filters.dateField !== DEFAULT_DELIVERY_FILTERS.dateField) params.set('dateField', filters.dateField)
   if (filters.dateFrom) params.set('dateFrom', filters.dateFrom)
   if (filters.dateTo) params.set('dateTo', filters.dateTo)
   const page = Math.max(1, filters.page ?? 1)
@@ -182,6 +188,8 @@ export function hasActiveDeliveryFilters(filters: DeliveryFilters): boolean {
     filters.keyword.trim()
     || filters.storeId
     || filters.status
+    || filters.sort !== DEFAULT_DELIVERY_FILTERS.sort
+    || filters.dateField !== DEFAULT_DELIVERY_FILTERS.dateField
     || filters.dateFrom
     || filters.dateTo,
   )
@@ -296,14 +304,22 @@ type ProductRelation = {
 }
 
 type DocumentItem = {
+  id?: string
+  quantity?: string | number
+  unitPrice?: string | number
+  unit?: string | null
   productNameSnapshot?: string | null
   productCodeSnapshot?: string | null
   productSpecSnapshot?: string | null
-  product?: ProductRelation | null
+  product?: (ProductRelation & { unit?: string | null }) | null
 }
 
 function projectDocumentItem(item: DocumentItem) {
   return {
+    id: item.id ?? '',
+    quantity: item.quantity ?? 0,
+    unitPrice: item.unitPrice ?? 0,
+    unit: item.unit ?? item.product?.unit ?? null,
     productNameSnapshot: item.productNameSnapshot ?? item.product?.name ?? null,
     productCodeSnapshot: item.productCodeSnapshot ?? item.product?.code ?? null,
     productSpecSnapshot: item.productSpecSnapshot ?? item.product?.spec ?? null,
@@ -344,10 +360,10 @@ export function projectOrderRow(row: any) {
         status: delivery.status,
       }))
       : [],
-    store: row.store ? { id: row.store.id, name: row.store.name, no: row.store.no } : null,
+    store: row.store ? { id: row.store.id, name: row.store.name, no: row.store.no, brandCode: row.store.brandCode ?? null } : null,
     supplier: row.supplier ? { id: row.supplier.id, name: row.supplier.name, no: row.supplier.no } : null,
     submittedSnapshotItems,
-    items: Array.isArray(row.items) ? row.items.map(projectDocumentItem) : [],
+    items: Array.isArray(row.items) ? (row.items as DocumentItem[]).map(projectDocumentItem) : [],
   }
 }
 
@@ -367,6 +383,10 @@ export function projectDeliveryRow(row: any) {
     actualTotalAmount: row.actualTotalAmount ?? row.totalAmount ?? 0,
     createdAt: row.createdAt,
     shippedAt: row.shippedAt,
+    deliveredAt: row.deliveredAt,
+    orderedAt: row.orderedAt ?? row.purchaseOrder?.submittedAt ?? row.purchaseOrder?.createdAt ?? null,
+    sourceType: row.sourceType === 'REPLENISHMENT' ? 'REPLENISHMENT' as const : 'NORMAL_ORDER' as const,
+    sourceNo: row.sourceNo ?? null,
     purchaseOrder: row.purchaseOrder
       ? { id: row.purchaseOrder.id, no: row.purchaseOrder.no }
       : null,
@@ -381,7 +401,6 @@ export function projectDeliveryRow(row: any) {
       warnings: Array.isArray(row.profitability.warnings) ? row.profitability.warnings : [],
     } : null,
     items: Array.isArray(row.items) ? row.items.map((item: any) => ({
-      id: item.id,
       ...projectDocumentItem(item),
       profitability: item.profitability ?? null,
     })) : [],

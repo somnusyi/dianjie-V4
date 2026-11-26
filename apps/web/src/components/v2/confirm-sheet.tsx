@@ -29,6 +29,8 @@ export type ConfirmSheetState = {
   inputInitialValue?: string
   /** 覆盖遮罩层级；全局对话框需高于导航浮层和打印预览。 */
   layerClassName?: string
+  /** 入出库等电脑版工作台使用较宽的居中确认框；小屏仍保留底部弹层。 */
+  desktopDialog?: boolean
   onConfirm?: (inputValue?: string) => void | Promise<void>
   onCancel?: () => void
 }
@@ -46,7 +48,7 @@ export function ConfirmSheet(props: ConfirmSheetState & { close: () => void }) {
   const {
     open, title, body, confirmLabel = '确认', cancelLabel = '取消',
     tone = 'default', withInput, inputPlaceholder, inputRequired, inputInitialValue,
-    layerClassName = 'z-[70]',
+    layerClassName = 'z-[70]', desktopDialog = false,
     onConfirm, onCancel, close,
   } = props
   const [val, setVal] = useState(inputInitialValue || '')
@@ -102,11 +104,11 @@ export function ConfirmSheet(props: ConfirmSheetState & { close: () => void }) {
       onClick={handleCancel}
     >
       <div
-        className="bg-bg-card w-full max-w-md max-h-[85dvh] overflow-y-auto rounded-2xl p-5 pb-7"
+        className={`bg-bg-card w-full max-w-md max-h-[85dvh] overflow-y-auto rounded-2xl p-5 pb-7 ${desktopDialog ? 'md:max-w-xl md:rounded-card md:p-7' : ''}`}
         style={{ paddingBottom: 'calc(28px + env(safe-area-inset-bottom))' }}
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="w-10 h-1 bg-border rounded-full mx-auto mb-4" />
+        <div className={`w-10 h-1 bg-border rounded-full mx-auto mb-4 ${desktopDialog ? 'md:hidden' : ''}`} />
         <h3 className="text-h2 text-ink">{title}</h3>
         {body && <div className="mt-2 text-caption text-gray2 whitespace-pre-line">{body}</div>}
         {error && <div role="alert" className="mt-3 rounded-cta bg-red-bg px-3 py-2 text-caption text-red-fg">{error}</div>}

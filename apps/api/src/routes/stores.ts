@@ -9,7 +9,7 @@ import { isStoreScoped, resolveActiveStore, storeScopeOf } from '../lib/auth-sco
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 const SENSITIVE_STORE_ROLES = new Set(['ADMIN', 'SUPER_ADMIN', 'FINANCE'])
 const SAFE_STORE_SELECT = {
-  id: true, no: true, name: true, address: true, phone: true, managerName: true,
+  id: true, no: true, name: true, brandCode: true, address: true, phone: true, managerName: true,
   consigneeId: true, status: true, lifecyclePhase: true, engineerId: true,
   expectedOpenAt: true, createdAt: true, updatedAt: true,
 } as const
@@ -243,6 +243,7 @@ export const storeRoutes: FastifyPluginAsync = async (app) => {
     const body = z.object({
       no: z.string().trim().min(1, '门店编号不能为空').max(20, '门店编号最多20个字符'),
       name: z.string().trim().min(1, '门店名称不能为空').max(80, '门店名称最多80个字符'),
+      brandCode: z.enum(['DIANJIE', 'LANCANGYAO', 'PAOPAO_ISLAND'], { errorMap: () => ({ message: '请选择门店所属品牌' }) }),
       address: z.string().trim().max(240).optional(),
       phone: z.string().trim().max(40).optional(),
       managerName: z.string().trim().max(40).optional(),
@@ -274,7 +275,8 @@ export const storeRoutes: FastifyPluginAsync = async (app) => {
     try {
       store = await prisma.store.create({
         data: {
-          tenantId, no: no.toUpperCase(), name, address: address || null, phone: phone || null,
+          tenantId, no: no.toUpperCase(), name, brandCode: body.data.brandCode,
+          address: address || null, phone: phone || null,
           managerName: managerName || null, status: 'ENABLED',
           bankAccountName: bankAccountName || null,
           invoiceTaxId: invoiceTaxId || null,
@@ -328,6 +330,12 @@ export const storeRoutes: FastifyPluginAsync = async (app) => {
     const body = req.body as any
     const data: any = {}
     for (const k of ['name','address','phone','managerName']) if (body[k] !== undefined) data[k] = body[k]
+    if (body.brandCode !== undefined) {
+      if (!isAdmin) return reply.status(403).send({ error: '只有管理员能确认门店品牌' })
+      const brand = z.enum(['DIANJIE', 'LANCANGYAO', 'PAOPAO_ISLAND']).safeParse(body.brandCode)
+      if (!brand.success) return reply.status(400).send({ error: '门店品牌无效' })
+      data.brandCode = brand.data
+    }
     if (body.expectedOpenAt !== undefined) data.expectedOpenAt = body.expectedOpenAt ? new Date(body.expectedOpenAt) : null
 
     // POS 导出的门店名与系统门店名可以不同(瑶海店历史上出现过两种写法)。日报上传

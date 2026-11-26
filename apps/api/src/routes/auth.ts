@@ -6,7 +6,9 @@ import { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
 import bcrypt from 'bcryptjs'
 import { loginRateLimitConfig } from '../lib/login-rate-key'
+import { refreshRateKey } from '../lib/account-rate-key'
 import { prisma } from '@dianjie/db'
+import { isStoreBrandRole } from '../lib/store-brand-assignment'
 import { resolveLoginTenantSlug } from '../lib/preview-tenant'
 import { ACCESS_TTL_MS, REFRESH_TTL_MS, issueAccessToken, issueSessionTokens } from '../services/authTokens'
 
@@ -35,15 +37,26 @@ const changePasswordSchema = z.object({
 const PHONE_RE = /^1[3-9]\d{9}$/
 
 // 多店门店列表：按 storeIds 顺序回 id/name/no，供前端门店切换器渲染；空集合回退单店 store
-async function loadScopeStores(user: { storeId: string | null; storeIds: string[] }) {
+async function loadScopeStores(user: { tenantId: string; role: string; storeId: string | null; storeIds: string[] }) {
   const ids = user.storeIds?.length ? user.storeIds : (user.storeId ? [user.storeId] : [])
   if (ids.length === 0) return []
   const rows = await prisma.store.findMany({
-    where: { id: { in: ids } },
-    select: { id: true, name: true, no: true },
+    where: { tenantId: user.tenantId, id: { in: ids } },
+    select: { id: true, name: true, no: true, brandCode: true },
   })
   const rank = new Map(ids.map((id, i) => [id, i]))
-  return rows.sort((a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0))
+  const ordered = rows.sort((a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0))
+  if (!isStoreBrandRole(user.role)) return ordered.map(({ brandCode: _brandCode, ...store }) => store)
+  const primary = ordered.find(store => store.id === user.storeId) || ordered[0]
+  return ordered.filter(store => primary && store.brandCode === primary.brandCode
+    && (primary.brandCode !== null || store.id === primary.id))
+    .map(({ brandCode: _brandCode, ...store }) => store)
+}
+
+async function visibleStoreScope(user: { tenantId: string; role: string; storeId: string | null; storeIds: string[] }) {
+  const stores = await loadScopeStores(user)
+  if (!isStoreBrandRole(user.role)) return { storeId: user.storeId, storeIds: user.storeIds, stores }
+  return { storeId: stores.find(store => store.id === user.storeId)?.id || stores[0]?.id || null, storeIds: stores.map(store => store.id), stores }
 }
 
 export const authRoutes: FastifyPluginAsync = async (app) => {
@@ -101,7 +114,8 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     }
 
     // access + refresh 各分配独立 jti, 撤销表按 jti 索引
-    const { token, refreshToken, expiresInMs } = issueSessionTokens(app.jwt, user, browserOrder?.order, browserOrder?.issuedAtMs)
+    const visibleScope = await visibleStoreScope(user)
+    const { token, refreshToken, expiresInMs } = issueSessionTokens(app.jwt, { ...user, ...visibleScope }, browserOrder?.order, browserOrder?.issuedAtMs)
 
     await prisma.$transaction([
       prisma.user.update({ where: { id: user.id }, data: { lastLoginAt: new Date() } }),
@@ -127,9 +141,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         name: user.name,
         email: user.email,
         role: user.role,
-        storeId: user.storeId,
-        storeIds: user.storeIds,
-        stores: await loadScopeStores(user),
+        ...visibleScope,
         supplierId: user.supplierId,
         store: user.store,
         supplier: user.supplier,
@@ -140,7 +152,15 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
 
   // POST /api/auth/refresh — 用 refresh token 换新 access
   app.post('/refresh', {
-    config: { rateLimit: { max: 30, timeWindow: '1 minute' } },
+    config: { rateLimit: {
+      max: 30,
+      timeWindow: '1 minute',
+      keyGenerator: (request: any) => refreshRateKey(
+        request,
+        token => app.jwt.verify(token) as any,
+        isBrowserSession(request) ? () => readBrowserRefresh(request, app.jwt) : undefined,
+      ),
+    } },
   }, async (request, reply) => {
     const browser = isBrowserSession(request)
     const cookieRefresh = browser ? readBrowserRefresh(request, app.jwt) : null
@@ -182,7 +202,8 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     const browserClock = browser ? await browserSessionClock() : null
     if (browserClock && (decoded.exp * 1000 <= browserClock.issuedAtMs || (!decoded.bso && decoded.exp * 1000 > browserClock.legacyExpiresAtMs && browserClock.legacyExpiresAtMs <= browserClock.issuedAtMs)))
       return reply.status(401).send({ error: '浏览器会话已过期，请重新登录' })
-    const token = issueAccessToken(app.jwt, user, decoded.sid || decoded.jti)
+    const visibleScope = await visibleStoreScope(user)
+    const token = issueAccessToken(app.jwt, { ...user, ...visibleScope }, decoded.sid || decoded.jti)
     if (browser && browserClock) {
       const legacy = !decoded.bso || decoded.bso === '0'
       const exp = Math.min(decoded.exp, legacy ? Math.floor(browserClock.legacyExpiresAtMs / 1000) : decoded.exp)
@@ -198,8 +219,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       expiresInMs: ACCESS_TTL_MS,
       user: {
         id: user.id, tenantId: user.tenantId, name: user.name, email: user.email, role: user.role,
-        storeId: user.storeId, storeIds: user.storeIds,
-        stores: await loadScopeStores(user),
+        ...visibleScope,
         supplierId: user.supplierId,
         store: user.store, supplier: user.supplier,
       },
@@ -232,9 +252,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       name: user.name,
       email: user.email,
       role: user.role,
-      storeId: user.storeId,
-      storeIds: user.storeIds,
-      stores: await loadScopeStores(user),
+      ...(await visibleStoreScope(user)),
       store: user.store,
       supplier: user.supplier,
       tenantId,

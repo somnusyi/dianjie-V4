@@ -17,7 +17,7 @@ async function setup() {
   await act(async () => root!.render(<Page />))
   act(() => {
     Simulate.change(c.querySelector('select')!, { target: { value: 'company-a' } } as any)
-    const inputs = c.querySelectorAll('input')
+    const inputs = c.querySelectorAll('input:not([type=search])')
     for (const [i, value] of ['张先生', '13970000999', 'test-password'].entries()) Simulate.change(inputs[i], { target: { value } } as any)
   })
   return c
@@ -54,4 +54,18 @@ it('ignores an older history response after successful creation', async () => {
   expect(c.querySelector('table')?.textContent).toContain('新人员')
   expect(c.querySelector('table')?.textContent).not.toContain('旧人员')
   expect([...c.querySelectorAll('button')].find(b => b.textContent === '下一页')?.disabled).toBe(false)
+})
+
+it('searching companies keeps existing form entries and only an explicit selection changes the submitted company', async () => {
+  const c = await setup()
+  const searchButton = c.querySelector<HTMLButtonElement>('button[aria-label="展开搜索供应商公司"]')!
+  act(() => searchButton.click())
+  const query = c.querySelector('input[type=search]')!
+  act(() => Simulate.change(query, { target: { value: '无此公司' } } as any))
+  expect((c.querySelector('select') as HTMLSelectElement).value).toBe('company-a')
+  expect(c.querySelector('[role=status]')?.textContent).toContain('未找到匹配项')
+  expect((c.querySelector('input[type=tel]') as HTMLInputElement).value).toBe('13970000999')
+  expect(mock.mock.calls.filter(([, options]) => options?.method === 'POST')).toHaveLength(0)
+  act(() => c.querySelector('button[aria-label="清除搜索供应商公司"]')!.dispatchEvent(new MouseEvent('click', { bubbles: true })))
+  expect((c.querySelector('select') as HTMLSelectElement).value).toBe('company-a')
 })

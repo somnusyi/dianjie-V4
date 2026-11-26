@@ -85,21 +85,21 @@ describe('总仓自损页面未提交保护', () => {
     await act(async () => { fileInput.dispatchEvent(new Event('change', { bubbles: true })); await Promise.resolve(); await Promise.resolve() })
     expect(container.textContent).toContain('a.jpg')
 
-    const request = [...container.querySelectorAll('button')].find(button => button.textContent === '审核后提交自损')!
+    const request = [...container.querySelectorAll('button')].find(button => button.textContent === '提交自损')!
     await act(async () => request.click())
-    const confirm = [...container.querySelectorAll('button')].find(button => button.textContent === '确认扣库并生成自损单')!
+    const confirm = [...container.querySelectorAll('button')].find(button => button.textContent === '确认提交自损单')!
     await act(async () => { confirm.click(); await Promise.resolve() })
     const blockedProceed = vi.fn()
     const blocked = new CustomEvent(SUPPLY_CHAIN_BEFORE_NAVIGATE_EVENT, { cancelable: true, detail: { proceed: blockedProceed } })
     await act(async () => { expect(window.dispatchEvent(blocked)).toBe(false) })
     expect(blockedProceed).not.toHaveBeenCalled()
-    expect(container.textContent).toContain('自损单正在提交入账')
+    expect(container.textContent).toContain('自损单正在提交')
     await act(async () => {
       resolveBatch({ replayed: false, count: 1, totalAmount: 5, doc: { id: 'd1', docNo: 'BS-001' } })
       await batch
       await Promise.resolve()
     })
-    expect(container.textContent).toContain('自损单 BS-001 已入账')
+    expect(container.textContent).toContain('自损单 BS-001 已提交待审核')
 
     const proceed = vi.fn()
     const event = new CustomEvent(SUPPLY_CHAIN_BEFORE_NAVIGATE_EVENT, { cancelable: true, detail: { proceed } })

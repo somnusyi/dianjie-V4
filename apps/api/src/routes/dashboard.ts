@@ -58,7 +58,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
         where: { tenantId, status: 'OVERDUE', ...scheduleStoreFilter },
       }),
       // 待审批数（总部用）
-      role !== 'MANAGER' ? prisma.paymentSchedule.count({
+      scope === null ? prisma.paymentSchedule.count({
         where: { tenantId, status: 'PENDING_APPROVAL' },
       }) : Promise.resolve(0),
       // 待收货入库单
@@ -67,13 +67,13 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
       }),
       // 待处理报损
       prisma.lossClaim.count({
-        where: { tenantId, status: 'PENDING' },
+        where: { tenantId, status: 'PENDING', ...storeFilter },
       }),
-      // 全部商品（算低库存）
-      prisma.product.findMany({
+      // 商品主档 stock 是集团级汇总，门店账号不展示为本店低库存。
+      scope === null ? prisma.product.findMany({
         where: { tenantId, status: 'ENABLED' },
         select: { id: true, name: true, stock: true, minStock: true, unit: true },
-      }),
+      }) : Promise.resolve([]),
       // 7天内到期账期
       prisma.paymentSchedule.findMany({
         where: {
@@ -100,7 +100,7 @@ export const dashboardRoutes: FastifyPluginAsync = async (app) => {
         take: 6,
       }),
       // 各门店本月采购汇总（总部用）
-      role !== 'MANAGER' ? prisma.receipt.groupBy({
+      scope === null ? prisma.receipt.groupBy({
         by: ['storeId'],
         where: { tenantId, status: { notIn: ['VOID','REJECTED'] }, createdAt: { gte: monthStart } },
         _sum: { totalAmount: true },

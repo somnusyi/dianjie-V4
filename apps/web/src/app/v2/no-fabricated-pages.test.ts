@@ -24,6 +24,9 @@ const STATIC_PAGE_ALLOWLIST: Record<string, string> = {
   'supply-chain/docs/new-outbound/page.tsx': '委托NewWarehouseDocumentPage和服务器草稿钩子',
   'supply-chain/inventory-management/limits/[productId]/edit/page.tsx': '只挂载InventoryRules，真实数据由组件读取',
   'supply-chain/inventory-management/limits/new/page.tsx': 'InventoryRuleSelector读取真实商品后打开规则编辑',
+  'supply-chain/finance-reports/settlements/page.tsx': '委托 UpstreamProcurementPage 读取真实月度对账',
+  'supply-chain/suppliers/[id]/edit/page.tsx': '委托 SupplierManager 读取并编辑真实供应商',
+  'supply-chain/suppliers/contracts/page.tsx': '委托 UpstreamProcurementPage 读取真实合同档案',
   'supply-chain/navigation/page.tsx': '仅功能路由目录，无经营数字',
   'supply-chain/procurement/receipts/[id]/edit/page.tsx': '委托ProcurementDocumentEditor读取真实收货',
   'supply-chain/procurement/receipts/new/page.tsx': '委托ProcurementDocumentEditor读取发货上下文',
@@ -34,6 +37,9 @@ const STATIC_PAGE_ALLOWLIST: Record<string, string> = {
   'supply-chain/stocktake/page.tsx': '服务端仅重定向到盘点单页，不渲染业务数据',
   'supply-chain/replenishment-orders/new/page.tsx': '新建页仅挂载 ReplenishmentOrderEditor，取数和提交由共享组件完成',
   'supply-chain/replenishment-orders/[id]/page.tsx': '详情页仅解析路由并挂载 ReplenishmentOrderEditor，真实数据由共享组件读取',
+  'boss/feedback/page.tsx': '停用的反馈审批入口仅重定向到个人反馈',
+  'boss/feedback/[id]/page.tsx': '停用的反馈审批详情仅重定向到反馈详情',
+  'finance-pc/login/page.tsx': '独立财务登录表单，不展示经营数据',
 }
 
 function collectPages(dir: string, acc: string[] = []): string[] {

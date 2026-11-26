@@ -8,6 +8,7 @@
 import { SearchableSelect } from '@/components/v2/searchable-select'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { flushSync } from 'react-dom'
 import { Chip } from '@/components/v2'
 import { OrderCenterHorizontalTable } from '@/components/v2/order-center-horizontal-table'
 import {
@@ -17,6 +18,7 @@ import {
 import { OrderCenterTabs } from '@/components/v2/order-center-tabs'
 import { EmptyState, FriendlyError, SkeletonCard } from '@/components/v2/skeleton'
 import { apiDownload, apiFetch } from '@/lib/v2-auth'
+import { storePrintIdentity } from '@/lib/store-print-identity'
 import {
   buildOrderQuery,
   DEFAULT_ORDER_FILTERS,
@@ -209,6 +211,9 @@ export default function InternalSupplyChainOrdersPage() {
   const [stores, setStores] = useState<Store[]>([])
   const [dateError, setDateError] = useState<string | null>(null)
   const [exporting, setExporting] = useState(false)
+  const [printing, setPrinting] = useState(false)
+  const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([])
+  const [printOrders, setPrintOrders] = useState<ProjectedOrder[]>([])
   const abortControllerRef = useRef<AbortController | null>(null)
 
   useEffect(() => {
@@ -239,6 +244,7 @@ export default function InternalSupplyChainOrdersPage() {
       .then(data => {
         if (controller.signal.aborted) return
         setOrders((data.items || []).map(projectOrderRow))
+        setSelectedOrderIds([])
         setTotal(data.total || 0)
       })
       .catch(reason => {
@@ -257,6 +263,19 @@ export default function InternalSupplyChainOrdersPage() {
   const totalPages = useMemo(() => orderDeliveryTotalPages(total, filters.pageSize), [total, filters.pageSize])
   const range = useMemo(() => orderDeliveryPaginationRange(filters.page, filters.pageSize, total), [filters.page, filters.pageSize, total])
   const filterActive = hasActiveOrderFilters(draftFilters)
+  const selectedOrders = (orders || []).filter(order => selectedOrderIds.includes(order.id))
+  const allSelected = Boolean(orders?.length) && selectedOrders.length === orders?.length
+  const printColumns: readonly OrderCenterTableColumn<ProjectedOrder>[] = [
+    {
+      id: 'select', header: '选择', defaultWidth: 64,
+      renderHeader: () => <input type="checkbox" aria-label="全选当前页订货单" checked={allSelected}
+        onChange={event => setSelectedOrderIds(event.target.checked ? (orders || []).map(order => order.id) : [])} />,
+      renderCell: order => <input type="checkbox" aria-label={`选择订货单 ${order.no}`}
+        checked={selectedOrderIds.includes(order.id)}
+        onChange={event => setSelectedOrderIds(current => event.target.checked ? [...current, order.id] : current.filter(id => id !== order.id))} />,
+    },
+    ...ORDER_COLUMNS,
+  ]
 
   function updateDraftFilters(changes: Partial<OrderFilters>) {
     const nextDateFrom = changes.dateFrom !== undefined ? changes.dateFrom : draftFilters.dateFrom
@@ -302,6 +321,24 @@ export default function InternalSupplyChainOrdersPage() {
       setError(String(reason?.message || reason))
     } finally {
       setExporting(false)
+    }
+  }
+
+  async function printSelectedOrders() {
+    if (printing || selectedOrders.length === 0) return
+    setPrinting(true)
+    setError(null)
+    try {
+      await apiFetch('/api/orders/print-events', {
+        method: 'POST', body: JSON.stringify({ action: 'BROWSER_PRINT', orderIds: selectedOrders.map(order => order.id) }),
+      })
+      flushSync(() => setPrintOrders(selectedOrders))
+      window.print()
+      setFilters(current => ({ ...current }))
+    } catch (reason: any) {
+      setError(String(reason?.message || reason || '合并打印失败'))
+    } finally {
+      setPrinting(false)
     }
   }
 
@@ -385,6 +422,10 @@ export default function InternalSupplyChainOrdersPage() {
             disabled={exporting || Boolean(dateError)}
             className="rounded-cta border border-accent bg-white px-4 py-2 text-button text-accent disabled:opacity-40"
           >{exporting ? '正在导出…' : '导出'}</button>
+          <button type="button" onClick={() => void printSelectedOrders()} disabled={printing || selectedOrders.length === 0}
+            className="rounded-cta border border-ink bg-white px-4 py-2 text-button text-ink disabled:opacity-40">
+            {printing ? '准备打印…' : `合并打印所选（${selectedOrders.length}）`}
+          </button>
         </div>
 
         {dateError && (
@@ -410,13 +451,13 @@ export default function InternalSupplyChainOrdersPage() {
             <OrderCenterHorizontalTable>
               <OrderCenterResizableTable
                 ariaLabel="订货单查询结果"
-                columns={ORDER_COLUMNS}
+                columns={printColumns}
                 rows={orders}
                 rowKey={order => order.id}
                 footer={(
                   <tfoot className="border-t border-border bg-bg">
                     <tr>
-                      <td colSpan={18} className="px-4 py-3 text-right font-semibold">合计</td>
+                      <td colSpan={19} className="px-4 py-3 text-right font-semibold">合计</td>
                       <td className="px-4 py-3 text-right font-num font-semibold">
                         ¥{orders.reduce((sum, order) => sum + Number(order.totalAmount || 0), 0).toLocaleString('zh-CN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                       </td>
@@ -448,6 +489,44 @@ export default function InternalSupplyChainOrdersPage() {
           </div>
         )}
       </main>
+      <section data-supply-chain-selected-print aria-hidden="true">
+        {printOrders.map(order => {
+          const store = storePrintIdentity(order.store || { name: '—' })
+          return <article key={order.id} className="supply-chain-selected-print-page">
+            <h1>订货单</h1>
+            <p>订货单号：{order.no}</p>
+            <p>品牌：{store.brand}　门店：{store.branch}　门店编号：{store.no}</p>
+            <p>收货方：{store.fullName}　供应商：{order.supplier?.name || '—'}</p>
+            <p>期望到货：{orderDeliveryDateText(order.expectedDeliveryDate)}</p>
+            <table>
+              <thead><tr><th>商品</th><th>数量</th><th>单价</th><th>金额</th></tr></thead>
+              <tbody>{order.items.map((item: any, index: number) => (
+                <tr key={item.id || index}>
+                  <td>{item.productNameSnapshot || '—'}</td>
+                  <td>{Number(item.quantity).toLocaleString('zh-CN')} {item.unit || ''}</td>
+                  <td>¥{Number(item.unitPrice).toFixed(2)}</td>
+                  <td>¥{(Number(item.quantity) * Number(item.unitPrice)).toFixed(2)}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+            <p>合计：¥{Number(order.totalAmount).toFixed(2)}</p>
+          </article>
+        })}
+      </section>
+      <style jsx global>{`
+        [data-supply-chain-selected-print] { display: none; }
+        @media print {
+          body * { visibility: hidden !important; }
+          [data-supply-chain-selected-print], [data-supply-chain-selected-print] * { visibility: visible !important; }
+          [data-supply-chain-selected-print] { display: block; position: absolute; inset: 0; padding: 16mm; color: #111; background: #fff; }
+          .supply-chain-selected-print-page { break-after: page; page-break-after: always; }
+          .supply-chain-selected-print-page:last-child { break-after: auto; page-break-after: auto; }
+          .supply-chain-selected-print-page h1 { margin: 0 0 12px; text-align: center; font-size: 22px; }
+          .supply-chain-selected-print-page p { margin: 5px 0; font-size: 13px; }
+          .supply-chain-selected-print-page table { width: 100%; margin-top: 14px; border-collapse: collapse; font-size: 12px; }
+          .supply-chain-selected-print-page th, .supply-chain-selected-print-page td { border: 1px solid #999; padding: 6px; text-align: left; }
+        }
+      `}</style>
     </div>
   )
 }

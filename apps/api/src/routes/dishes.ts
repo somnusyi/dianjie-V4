@@ -11,7 +11,7 @@ import { Prisma, prisma } from '@dianjie/db'
 import { z } from 'zod'
 import dayjs from 'dayjs'
 import { monthRangeForDateCol } from '../lib/dateRange'
-import { isStoreScoped, resolveActiveStore } from '../lib/auth-scope'
+import { isStoreScoped, resolveActiveStore, storeScopeOf } from '../lib/auth-scope'
 import { parseBoundedInteger } from '../lib/pagination'
 import { normalizeDishName, normalizeVariantKey } from '../services/dailyBusinessImport'
 import { bomCalculationSnapshot, bomDateRangesOverlap, calculateBomConsumptions, isBomVersionEffective, selectEffectiveBomVersion } from '../services/bomLifecycle'
@@ -128,6 +128,25 @@ function scopedStoreId(user: any, requestedStoreId?: string) {
   return storeId
 }
 
+function dishVisibilityWhere(user: any) {
+  const stores = storeScopeOf(user)
+  if (stores === null) return {}
+  if (stores.length === 0) return { id: { in: [] } }
+  // groupWide is tenant-wide legacy metadata with no brand owner. Store users
+  // may only read dishes explicitly assigned to one of their own stores.
+  return { storeIds: { hasSome: stores } }
+}
+
+function readStoreFilter(user: any, requestedStoreId?: string) {
+  const stores = storeScopeOf(user)
+  if (stores === null) return requestedStoreId || null
+  if (requestedStoreId) {
+    if (!stores.includes(requestedStoreId)) throw Object.assign(new Error('无权限访问该门店'), { statusCode: 403 })
+    return requestedStoreId
+  }
+  return { in: stores }
+}
+
 export const dishRoutes: FastifyPluginAsync = async (app) => {
 
   // ── 菜品列表 ──────────────────────────────────────
@@ -135,7 +154,7 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
     const { tenantId, role } = req.user
     if (!VIEW_ROLES.includes(role)) return reply.status(403).send({ error: '无权' })
     const { status, category, withCost } = req.query as any
-    const where: any = { tenantId }
+    const where: any = { tenantId, ...dishVisibilityWhere(req.user) }
     if (category && category !== 'all') where.category = category
     const dishes = await prisma.dish.findMany({
       where, orderBy: [{ status: 'asc' }, { category: 'asc' }, { name: 'asc' }],
@@ -190,13 +209,15 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
     const end = dateOnly(chinaDateText())!
     const start = new Date(end)
     start.setUTCDate(start.getUTCDate() - parsed.data.days + 1)
+    const storeScope = storeScopeOf(req.user)
+    const storeWhere = storeScope === null ? {} : { storeId: { in: storeScope } }
     const [sales, pending, dishes] = await Promise.all([
       prisma.dishSale.findMany({
-        where: { tenantId, date: { gte: start, lte: end } },
+        where: { tenantId, date: { gte: start, lte: end }, ...storeWhere },
         select: { quantity: true, grossAmount: true },
       }),
       prisma.deferredBomTask.findMany({
-        where: { tenantId, status: 'PENDING', businessDate: { gte: start, lte: end } },
+        where: { tenantId, status: 'PENDING', businessDate: { gte: start, lte: end }, ...storeWhere },
         select: {
           id: true, rawDishName: true, spec: true, variantKey: true, reasonCode: true,
           quantity: true, netIncome: true, saleRecorded: true, businessDate: true,
@@ -204,7 +225,7 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
         },
       }),
       prisma.dish.findMany({
-        where: { tenantId },
+        where: { tenantId, ...dishVisibilityWhere(req.user) },
         select: {
           id: true, status: true, availableFrom: true, availableTo: true, inventoryPolicy: true,
           bomVersions: { where: { status: 'PUBLISHED' }, include: { items: true } },
@@ -263,7 +284,7 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
     const { tenantId, role } = req.user
     if (!VIEW_ROLES.includes(role)) return reply.status(403).send({ error: '无权' })
     const d = await prisma.dish.findFirst({
-      where: { id: req.params.id, tenantId },
+      where: { id: req.params.id, tenantId, ...dishVisibilityWhere(req.user) },
       include: {
         aliases: { where: { isActive: true }, orderBy: { rawName: 'asc' } },
         bomVersions: {
@@ -345,7 +366,7 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
   app.get('/:id/recipes', auth(app), async (req: any, reply: any) => {
     const { tenantId, role } = req.user
     if (!VIEW_ROLES.includes(role)) return reply.status(403).send({ error: '无权' })
-    const dish = await prisma.dish.findFirst({ where: { id: req.params.id, tenantId } })
+    const dish = await prisma.dish.findFirst({ where: { id: req.params.id, tenantId, ...dishVisibilityWhere(req.user) } })
     if (!dish) return reply.status(404).send({ error: '菜品不存在' })
     return prisma.dishRecipe.findMany({
       where: { dishId: req.params.id },
@@ -415,7 +436,7 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
   app.get('/:id/bom-versions', auth(app), async (req: any, reply: any) => {
     const { tenantId, role } = req.user
     if (!VIEW_ROLES.includes(role)) return reply.status(403).send({ error: '无权' })
-    const dish = await prisma.dish.findFirst({ where: { id: req.params.id, tenantId }, select: { id: true } })
+    const dish = await prisma.dish.findFirst({ where: { id: req.params.id, tenantId, ...dishVisibilityWhere(req.user) }, select: { id: true } })
     if (!dish) return reply.status(404).send({ error: '菜品不存在' })
     return prisma.dishBomVersion.findMany({
       where: { dishId: dish.id },
@@ -670,7 +691,7 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
       if (to) where.date.lte = new Date(to)
     }
     try {
-      const targetStoreId = scopedStoreId(req.user, qStore)
+      const targetStoreId = readStoreFilter(req.user, qStore)
       if (targetStoreId) where.storeId = targetStoreId
     } catch (error: any) {
       return reply.status(error.statusCode || 403).send({ error: error.message })
@@ -812,7 +833,7 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
     const { start, end } = monthRangeForDateCol(ym)
     const where: any = { tenantId, date: { gte: start, lte: end } }
     try {
-      const targetStoreId = scopedStoreId(req.user, storeId)
+      const targetStoreId = readStoreFilter(req.user, storeId)
       if (targetStoreId) where.storeId = targetStoreId
     } catch (error: any) {
       return reply.status(error.statusCode || 403).send({ error: error.message })
@@ -881,7 +902,7 @@ export const dishRoutes: FastifyPluginAsync = async (app) => {
       if (to) where.date.lte = new Date(to)
     }
     try {
-      const targetStoreId = scopedStoreId(req.user, storeId)
+      const targetStoreId = readStoreFilter(req.user, storeId)
       if (targetStoreId) where.storeId = targetStoreId
     } catch (error: any) {
       return reply.status(error.statusCode || 403).send({ error: error.message })

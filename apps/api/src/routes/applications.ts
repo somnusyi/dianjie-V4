@@ -3,13 +3,14 @@ import { z } from 'zod'
 import bcrypt from 'bcryptjs'
 import { prisma } from '@dianjie/db'
 import { fireAndForget as notify } from '../services/notify'
+import { isValidStoreBrandAssignment } from '../lib/store-brand-assignment'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 
 // 注意: PURCHASER 是 v2 legacy 别名, 实际等同于 MANAGER (店长权限).
 // 已从申请白名单移除, 防止供应商误申请→拿店长权限的安全漏洞.
 const APPLICABLE_ROLES = [
-  'MANAGER', 'KITCHEN_LEAD', 'CHEF_DIRECTOR', 'FINANCE', 'ENGINEERING',
+  'MANAGER', 'KITCHEN_LEAD', 'CHEF_DIRECTOR', 'FINANCE', 'ENGINEERING', 'SUPPLY_CHAIN',
   'REGIONAL_MANAGER', // 区域经理（指派门店集合）
   'SUPPLIER_OWNER',  // 注册新供应商公司 → 自动创建 Supplier 实体
   'SUPPLIER_STAFF',  // 加入已有供应商 → 绑定到指定 Supplier
@@ -26,6 +27,7 @@ const ROLE_LABELS: Record<string, string> = {
   CHEF_DIRECTOR: '总厨',
   FINANCE: '财务',
   ENGINEERING: '工程部',
+  SUPPLY_CHAIN: '内部供应链',
   REGIONAL_MANAGER: '区域经理',
   SUPPLIER_OWNER: '供应商负责人',
   SUPPLIER_STAFF: '供应商员工',
@@ -118,9 +120,10 @@ export const publicApplyRoute: FastifyPluginAsync = async (app) => {
       )]
       if (STORE_BOUND_APPLY_ROLES.includes(d.requestedRole) && reqStoreIds.length > 0) {
         const stores = await tx.store.findMany({
-          where: { id: { in: reqStoreIds }, tenantId: tenant.id, status: 'ENABLED' }, select: { id: true, name: true },
+          where: { id: { in: reqStoreIds }, tenantId: tenant.id, status: 'ENABLED' }, select: { id: true, name: true, brandCode: true },
         })
         if (stores.length !== reqStoreIds.length) return { error: '所选门店不存在或已停用' }
+        if (!isValidStoreBrandAssignment(d.requestedRole, stores)) return { error: '门店岗位只能申请同一品牌的门店' }
         requestedStoreName = stores.map(s => s.name).join('、')
       }
 
@@ -271,8 +274,9 @@ export const applicationRoutes: FastifyPluginAsync = async (app) => {
           return { status: 400, error: `${ROLE_LABELS[appl.requestedRole] || appl.requestedRole}角色必须绑定门店` }
         }
         if (storeIds.length > 0) {
-          const stores = await tx.store.findMany({ where: { id: { in: storeIds }, tenantId, status: 'ENABLED' }, select: { id: true } })
+          const stores = await tx.store.findMany({ where: { id: { in: storeIds }, tenantId, status: 'ENABLED' }, select: { id: true, brandCode: true } })
           if (stores.length !== storeIds.length) return { status: 400, error: '门店不存在或已停用' }
+          if (!isValidStoreBrandAssignment(appl.requestedRole, stores)) return { status: 400, error: '门店岗位只能绑定同一品牌的门店' }
         }
         const exists = await tx.user.findUnique({
           where: { tenantId_phone: { tenantId, phone: appl.phone } }, select: { id: true },

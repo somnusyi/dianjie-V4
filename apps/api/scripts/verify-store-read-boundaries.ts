@@ -101,7 +101,8 @@ async function main() {
     assert.equal(configured.status, 200)
     const stored = await prisma.store.findUniqueOrThrow({ where: { id: storeA.id } })
     assert.equal(stored.bankAccountNo, '622200001234')
-    assert.equal(stored.aggregatorApiKeyEnc, 'LOCAL-API-SECRET')
+    assert.notEqual(stored.aggregatorApiKeyEnc, 'LOCAL-API-SECRET')
+    assert.ok(stored.aggregatorApiKeyEnc?.startsWith('djenc:v1:'))
     const audit = await prisma.opLog.findFirstOrThrow({
       where: { tenantId: tenant.id, targetId: storeA.id, action: { startsWith: '更新门店收款配置' } },
       orderBy: { createdAt: 'desc' },

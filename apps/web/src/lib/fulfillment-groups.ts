@@ -11,6 +11,66 @@ export type FulfillmentOrderLike = {
   operationGroup?: OperationGroup | null
 }
 
+export type FulfillmentOrderDay = 'TODAY' | 'YESTERDAY' | 'EARLIER'
+export const ACTIONABLE_FULFILLMENT_STATUSES = ['SUBMITTED', 'CONFIRMED', 'DELIVERING'] as const
+
+type FulfillmentListPage<T> = {
+  items: T[]
+  total: number
+  page: number
+  pageSize: number
+}
+
+/** Loads every actionable status page before exposing any result to the UI. */
+export async function loadAllActionableFulfillmentOrders<T extends {
+  id: string
+  status: string
+  createdAt: string
+  submittedAt?: string | null
+}>(fetchPage: (
+  status: typeof ACTIONABLE_FULFILLMENT_STATUSES[number],
+  page: number,
+  pageSize: number,
+) => Promise<FulfillmentListPage<T>>): Promise<T[]> {
+  const pageSize = 100
+  const batches = await Promise.all(ACTIONABLE_FULFILLMENT_STATUSES.map(async status => {
+    const rows: T[] = []
+    for (let page = 1; ; page += 1) {
+      const result = await fetchPage(status, page, pageSize)
+      const items = Array.isArray(result.items) ? result.items : []
+      rows.push(...items)
+      if (rows.length >= result.total) break
+      if (items.length === 0) throw new Error(`履约订单分页不完整：${status} 第 ${page} 页为空`)
+    }
+    return rows
+  }))
+
+  const unique = new Map<string, T>()
+  batches.flat().forEach(order => unique.set(order.id, order))
+  return [...unique.values()].sort((a, b) => {
+    const byTime = Date.parse(b.submittedAt || b.createdAt) - Date.parse(a.submittedAt || a.createdAt)
+    return byTime || b.id.localeCompare(a.id)
+  })
+}
+
+function shanghaiDateKey(value: string | Date) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+  }).formatToParts(new Date(value))
+  const byType = Object.fromEntries(parts.map(part => [part.type, part.value]))
+  return `${byType.year}-${byType.month}-${byType.day}`
+}
+
+export function fulfillmentOrderDay(order: Pick<FulfillmentOrderLike, 'submittedAt' | 'createdAt'>, now: string | Date = new Date()): FulfillmentOrderDay {
+  const orderKey = shanghaiDateKey(order.submittedAt || order.createdAt)
+  const todayKey = shanghaiDateKey(now)
+  const yesterday = new Date(new Date(`${todayKey}T00:00:00+08:00`).getTime() - 86_400_000)
+  const yesterdayKey = shanghaiDateKey(yesterday)
+  if (orderKey === todayKey) return 'TODAY'
+  if (orderKey === yesterdayKey) return 'YESTERDAY'
+  return 'EARLIER'
+}
+
 /**
  * Metadata returned by GET /api/orders for orders that can be operated as a
  * group.  The server remains the source of truth for eligibility; the client

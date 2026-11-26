@@ -17,8 +17,8 @@ const expected: Record<string, string> = {
   'purchase-return': '序号|单据编号|出库日期|上游单据号|采购机构|供应商|金额|状态|复审状态|发票状态|打印状态|创建时间|创建人|备注',
   'other-in': '序号|单据编号|入库日期|机构|仓库|入库原因|金额|状态|复审状态|打印状态|创建时间|创建人|备注|附件',
   'other-out': '序号|单据编号|出库日期|上游单据号|机构|仓库|出库原因|金额|状态|复审状态|打印状态|创建时间|创建人|备注',
-  count: '序号|单据编号|盘点日期|机构名称|仓库|物品数|账面金额|实盘金额|盈亏金额|盘点类型|盘点方式|状态|盘点差异|审核日期|打印状态|创建时间|创建人',
-  'multi-count': '序号|单据编号|盘点日期|机构|仓库|物品数|状态|审核日期|是否生成盘点单|打印状态|创建日期|创建人',
+  count: '序号|单据编号|盘点日期|机构名称|仓库|物品数|账面金额|实盘金额|盈亏金额|盘点类型|盘点方式|状态|复审状态|盘点差异|提交人|提交时间|审核人|审核时间|打印状态|创建时间|创建人|备注',
+  'multi-count': '序号|单据编号|盘点日期|机构|仓库|物品数|状态|提交人|提交时间|审核人|审核时间|是否生成盘点单|打印状态|创建日期|创建人|备注',
   profit: '序号|单据编号|来源单号|单据日期|机构|仓库|物品（项）|状态|打印状态|创建时间|创建人|备注',
   loss: '序号|单据编号|来源单号|单据日期|机构|仓库|物品（项）|状态|打印状态|创建人|创建时间|备注',
   limits: '序号|机构编码|机构名称|仓库编码|仓库名称|物品编码|物品名称|规格型号|单位|最小库存天数|安全库存天数|最大库存天数|近7天日均出库量|近14天日均出库量|近21天日均出库量|近30天日均出库量|近60天日均出库量|库存下限数量|库存上限数量|安全库存|当前库存',
@@ -298,7 +298,7 @@ describe('审核要求与管理页面', () => {
     await render('count')
     expect(container.querySelector('tbody')?.textContent).toContain('3项差异')
     expect(container.querySelector('tbody td[class*=fixedDocument]')?.textContent).toContain('PD001')
-    expect([...container.querySelectorAll('tbody button')].map(b => b.textContent)).toEqual(['反审核', '打印', '导出'])
+    expect([...container.querySelectorAll('tbody button')].map(b => b.textContent)).toEqual(['复盘审核', '反审核', '打印', '导出'])
     api.fetch.mockResolvedValueOnce({ no: 'PD001', countDate: '2026-10-12', items: [{ id: 'line', productNameSnapshot: '土豆', countedQuantity: 8 }] })
     await act(async () => { button('打印').click(); await new Promise(resolve => setTimeout(resolve, 10)) })
     expect(api.fetch).toHaveBeenLastCalledWith('/api/warehouse-stocktakes/one/review')
@@ -323,9 +323,9 @@ describe('审核要求与管理页面', () => {
   })
 
   it.each([
-    ['POSTED', 'UNREVIEWED', ['编辑', '审核', '打印', '保存', '质检']],
-    ['CONFIRMED', 'UNREVIEWED', ['反审核', '复审', '打印', '保存', '质检']],
-    ['CONFIRMED', 'REVIEWED', ['打印', '保存', '质检']],
+    ['POSTED', 'UNREVIEWED', ['编辑', '审核', '打印', '保存']],
+    ['CONFIRMED', 'UNREVIEWED', ['反审核', '复审', '打印', '保存']],
+    ['CONFIRMED', 'REVIEWED', ['打印', '保存']],
   ])('仓库单据按真实%s/%s显示阶段动作，固定动作保留', async (docStatus, docReviewStatus, expectedActions) => {
     api.fetch.mockResolvedValueOnce({ ...result('other-in'), rows: [{ id:'doc', detailId:'doc', recordType:'WAREHOUSE_DOC', no:'RK-DOC', docStatus, docReviewStatus }] })
     await render('other-in')
@@ -336,18 +336,17 @@ describe('审核要求与管理页面', () => {
   })
 
   it.each([
-    ['UPSTREAM_RECEIPT','purchase-in','receipts','PENDING',['编辑','审核','打印','保存','质检']],
-    ['UPSTREAM_RETURN','purchase-return','returns','AUDITED',['反审核','复审','打印','保存','质检']],
-    ['UPSTREAM_RECEIPT','purchase-in','receipts','REVIEWED',['打印','保存','质检']],
+    ['UPSTREAM_RECEIPT','purchase-in','receipts','PENDING',['编辑','审核','打印','保存']],
+    ['UPSTREAM_RETURN','purchase-return','returns','AUDITED',['反审核','复审','打印','保存']],
+    ['UPSTREAM_RECEIPT','purchase-in','receipts','REVIEWED',['打印','保存']],
   ])('采购真实来源 %s 固定入口及阶段使用原始 ID',async(recordType,page,path,approvalStatus,actions)=>{
     api.fetch.mockResolvedValueOnce({...result(page),rows:[{id:'prefixed:source-id',detailId:'source-id',recordType,no:'SOURCE-NO',sourceStatus:approvalStatus==='REVIEWED'?'POSTED':'DRAFT',approvalStatus,businessFieldsLocked:approvalStatus==='PENDING'?0:1}]})
     await render(page)
     const cell=container.querySelector('tbody td[class*=operation]')!
     expect([...cell.querySelectorAll('a,button')].map(el=>el.textContent)).toEqual(actions)
     for(const link of cell.querySelectorAll('a'))expect(link.getAttribute('href')).toContain(`/procurement/${path}/source-id/edit`)
-    api.fetch.mockResolvedValueOnce({version:0,image:null,history:[],canWrite:false})
-    await act(async()=>Array.from(cell.querySelectorAll('button')).find(b=>b.textContent==='质检')!.click())
-    expect(api.fetch.mock.calls.at(-1)?.[0]).toBe(`/api/upstream/${recordType==='UPSTREAM_RECEIPT'?'receipts':'purchase-returns'}/source-id/quality-image`)
+    // Quality images belong to individual goods batches in the detail, not a whole-document row action.
+    expect([...cell.querySelectorAll('button')].some(b=>b.textContent==='质检')).toBe(false)
     expect(api.fetch.mock.calls.every(([,init])=>init?.method!=='POST')).toBe(true)
   })
 
@@ -378,15 +377,15 @@ describe('审核要求与管理页面', () => {
 
 })
 
-it('多人逐行操作不依赖勾选其他单，待提交审核禁用、已审核只打印导出',async()=>{
- const rows=[{id:'multi-1',detailId:'multi-1',no:'MULTI-1',recordType:'WAREHOUSE_STOCKTAKE',status:'草稿'},{id:'multi-2',detailId:'multi-2',no:'MULTI-2',recordType:'WAREHOUSE_STOCKTAKE',status:'已审核'}]
- api.fetch.mockImplementation(async(url:string)=>url.includes('/inventory-management/')?{...result('multi-count'),rows}:url==='/api/warehouse-stocktakes/multi-1'?{status:'DRAFT',rowVersion:7}:{})
+it('多人逐行操作不依赖勾选其他单，已审核单只提供生成正式盘点单',async()=>{
+ const rows=[{id:'multi-1',detailId:'multi-1',no:'MULTI-1',recordType:'WAREHOUSE_STOCKTAKE',status:'草稿',generated:'否'},{id:'multi-2',detailId:'multi-2',no:'MULTI-2',recordType:'WAREHOUSE_STOCKTAKE',status:'已审核',generated:'否'}]
+ api.fetch.mockImplementation(async(url:string)=>url.includes('/inventory-management/')?{...result('multi-count'),rows}:url==='/api/warehouse-stocktakes/multi-1'?{status:'DRAFT',rowVersion:7}:url==='/api/warehouse-stocktakes/multi-2'?{status:'CONFIRMED',rowVersion:8}:{})
  await render('multi-count')
  const first=[...container.querySelectorAll('tbody tr')].find(row=>row.textContent?.includes('MULTI-1'))!
  const second=[...container.querySelectorAll('tbody tr')].find(row=>row.textContent?.includes('MULTI-2'))!
  expect([...first.querySelectorAll('td:last-child button')].map(b=>b.textContent)).toEqual(['提交','审核','打印','导出'])
  expect((first.querySelectorAll('td:last-child button')[1] as HTMLButtonElement).disabled).toBe(true)
- expect([...second.querySelectorAll('td:last-child button')].map(b=>b.textContent)).toEqual(['打印','导出'])
+ expect([...second.querySelectorAll('td:last-child button')].map(b=>b.textContent)).toEqual(['生成盘点单','打印','导出'])
  await act(async()=>first.querySelector<HTMLButtonElement>('td:last-child button')!.click())
  expect(api.fetch.mock.calls.some(([,init])=>init?.method==='POST')).toBe(false)
  await act(async()=>button('取消').click())
@@ -396,4 +395,8 @@ it('多人逐行操作不依赖勾选其他单，待提交审核禁用、已审�
  const writes=api.fetch.mock.calls.filter(([,init])=>init?.method==='POST')
  expect(writes).toHaveLength(1);expect(writes[0][0]).toBe('/api/warehouse-stocktakes/multi-1/submit')
  expect(JSON.parse(String(writes[0][1]?.body))).toEqual({rowVersion:7})
+ const currentSecond=[...container.querySelectorAll('tbody tr')].find(row=>row.textContent?.includes('MULTI-2'))!
+ await act(async()=>currentSecond.querySelector<HTMLButtonElement>('td:last-child button')!.click())
+ await act(async()=>button('确认生成盘点单').click())
+ expect(api.fetch.mock.calls.filter(([,init])=>init?.method==='POST').at(-1)?.[0]).toBe('/api/warehouse-stocktakes/multi-2/generate-formal')
 })

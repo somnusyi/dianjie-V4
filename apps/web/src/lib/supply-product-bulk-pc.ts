@@ -65,7 +65,7 @@ export function buildSupplyProductExportSearch(
 
 export function buildSupplyProductExportPath(filters: Pick<SupplyProductFilters, 'q' | 'category' | 'status' | 'supplierId'>): string {
   const search = buildSupplyProductExportSearch(filters)
-  return '/api/products/export.csv' + (search ? `?${search}` : '')
+  return '/api/products/export.csv?scope=supply-chain' + (search ? `&${search}` : '')
 }
 
 export function productExportFilename(date = new Date()): string {

@@ -61,7 +61,64 @@
       "codeUrl": "https://github.com/somnusyi/dianjie-V4/tree/v1.3.3-hotfix.1",
       "commitUrl": "https://github.com/somnusyi/dianjie-V4/commit/fcde54a5a07bef1017b001df02710baf2cfaea30",
       "documentUrl": "https://github.com/somnusyi/dianjie-V4/blob/v1.3.3-hotfix.1/docs/releases/1.3.3-hotfix.1.md"
+    },
+    {
+      "version": "1.3.4",
+      "tag": "v1.3.4",
+      "commit": "3a8c521c1cd0bb471142a4af3bb7856be60eee3c",
+      "document": "docs/releases/1.3.4.md",
+      "status": "released_production_and_uat",
+      "remoteStatus": "github_and_gitea_verified",
+      "codeUrl": "https://github.com/somnusyi/dianjie-V4/tree/v1.3.4",
+      "commitUrl": "https://github.com/somnusyi/dianjie-V4/commit/3a8c521c1cd0bb471142a4af3bb7856be60eee3c",
+      "documentUrl": "docs/releases/1.3.4.md"
+    },
+    {
+      "version": "1.3.4-hotfix.1",
+      "businessVersion": "1.3.4",
+      "tag": "v1.3.4-hotfix.1",
+      "commit": "5d98a92440d8ee7891443bd51fe0ad76895148ce",
+      "document": "docs/releases/1.3.4-hotfix.1.md",
+      "status": "released_production_and_uat",
+      "remoteStatus": "local_release_tag_not_pushed"
+    },
+    {
+      "version": "1.3.4-hotfix.2",
+      "businessVersion": "1.3.4",
+      "tag": "v1.3.4-hotfix.2",
+      "commit": "4cec60442a2b6cdcb9c0253164e2a0beee7c6504",
+      "document": "docs/releases/1.3.4-hotfix.2.md",
+      "status": "released_production_and_uat",
+      "remoteStatus": "local_release_tag_not_pushed"
+    },
+    {
+      "version": "1.3.4-hotfix.3",
+      "businessVersion": "1.3.4",
+      "tag": "v1.3.4-hotfix.3",
+      "commit": "9b9c53fd7d6fdc0d530d6cec178478e1ec393f2b",
+      "document": "docs/releases/1.3.4-hotfix.3.md",
+      "status": "released_production_and_uat",
+      "remoteStatus": "local_release_tag_not_pushed"
+    },
+    {
+      "version": "1.3.5",
+      "tag": "v1.3.5",
+      "sourceCommit": "2278c9d3961f8848fbf6136d062bb1294e47869d",
+      "document": "docs/releases/1.3.5.md",
+      "status": "released_production_and_uat",
+      "remoteStatus": "github_and_gitea_verified",
+      "codeUrl": "https://github.com/somnusyi/dianjie-V4/tree/v1.3.5",
+      "documentUrl": "https://github.com/somnusyi/dianjie-V4/blob/v1.3.5/docs/releases/1.3.5.md"
+    },
+    {
+      "version": "1.3.6",
+      "tag": "v1.3.6",
+      "sourceCommit": "86cb2a5",
+      "document": "docs/releases/1.3.6.md",
+      "status": "released_production_only",
+      "remoteStatus": "github_and_gitea_verified",
+      "codeUrl": "https://github.com/somnusyi/dianjie-V4/tree/v1.3.6"
     }
   ],
-  "documentationRemoteStatus": "1.3.3_published_other_historical_tags_remain_local"
+  "documentationRemoteStatus": "1.3.6_release_tag_github_and_gitea"
 }

@@ -5,13 +5,14 @@ import Link from 'next/link'
 import { createPortal, flushSync } from 'react-dom'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
-import { useSearchParams } from 'next/navigation'
 
 type CountItem = {
   id: string
   productCodeSnapshot: string | null
   productNameSnapshot: string | null
   productSpecSnapshot: string | null
+  storageLocationSnapshot: string | null
+  additionSource: 'LEGACY' | 'SYSTEM' | 'PLAN' | 'RECOUNT' | 'MANUAL' | 'MERGED'
   unitSnapshot: string | null
   bookQuantity: number
   countedQuantity: number | null
@@ -28,7 +29,7 @@ type Count = {
   countDate: string
   status: string
   totalDifferenceValue: number
-  store: { name: string } | null
+  warehouse: { name: string } | null
   items: CountItem[]
 }
 
@@ -43,6 +44,7 @@ const REASON_LABELS: Record<string, string> = {
 
 const statusLabel = (status: string) => COUNT_STATUS[status] || status
 const reasonLabel = (reasonCode: string | null) => reasonCode ? (REASON_LABELS[reasonCode] || reasonCode) : '—'
+const additionSourceLabel: Record<CountItem['additionSource'], string> = { LEGACY: '历史数据', SYSTEM: '系统圈定', PLAN: '盘点方案', RECOUNT: '复盘补充', MANUAL: '手工添加', MERGED: '多人汇总' }
 const evidenceCount = (item: CountItem) => item.evidenceKeys?.length ?? item.evidenceUrls?.length ?? 0
 // Safari's native print pipeline can reserve a little more vertical space than
 // the CSS @page box reports (printer imageable area and preview rounding). Keep
@@ -62,7 +64,7 @@ type PreparedPrint = { key: string; pages: PrintRow[][] }
 type MeasuredPrintRow = { row: PrintRow; height: number }
 
 function PrintHeader({ count, scope, continuation = false }: { count: Count; scope: string; continuation?: boolean }) {
-  return <header data-stocktake-print-header="true" className="stocktake-print-document-header"><p>供应链 / 盘点复盘（只读打印件）{continuation ? '（续页）' : ''}</p><h1>{count.no} · {count.store?.name || '—'}</h1><p>盘点日期 {count.countDate} · 状态 {statusLabel(count.status)}</p><p>打印范围：{scope}{continuation ? '' : `；整单差异金额：¥${money(count.totalDifferenceValue)}（非当前筛选合计）`}</p></header>
+  return <header data-stocktake-print-header="true" className="stocktake-print-document-header"><p>供应链 / 盘点复盘（只读打印件）{continuation ? '（续页）' : ''}</p><h1>{count.no} · 仓库：{count.warehouse?.name || '—'}</h1><p>盘点日期 {count.countDate} · 状态 {statusLabel(count.status)}</p><p>打印范围：{scope}{continuation ? '' : `；整单差异金额：¥${money(count.totalDifferenceValue)}（非当前筛选合计）`}</p></header>
 }
 
 const productText = (item: CountItem) => `${item.productNameSnapshot || '—'}${item.productSpecSnapshot ? ` ${item.productSpecSnapshot}` : ''}`
@@ -72,10 +74,10 @@ const fullPrintRow = (item: CountItem): PrintRow => ({ item, productText: produc
 function ReviewTable({ items, printable = false, printRows }: { items: CountItem[]; printable?: boolean; printRows?: PrintRow[] }) {
   const rows = printRows || items.map(fullPrintRow)
   return <ResponsiveDataTable desktopOnly={printable} label="盘点复盘"><table className={`${printable ? 'w-full' : 'min-w-[980px]'} border-collapse text-left text-caption`}>
-    {printable && <colgroup><col style={{ width: '10%' }} /><col style={{ width: '18%' }} /><col style={{ width: '5%' }} /><col style={{ width: '7%' }} /><col style={{ width: '7%' }} /><col style={{ width: '8%' }} /><col style={{ width: '10%' }} /><col style={{ width: '29%' }} /><col style={{ width: '6%' }} /></colgroup>}
-    <thead><tr className="border-b border-gray3 bg-bg"><th className="px-3 py-2">编码</th><th className="px-3 py-2">商品 / 规格</th><th className="px-3 py-2">单位</th><th className="px-3 py-2 text-right">账面</th><th className="px-3 py-2 text-right">实盘</th><th className="px-3 py-2 text-right">差异数量</th><th className="px-3 py-2 text-right">差异金额</th><th className="px-3 py-2">原因说明</th><th className="px-3 py-2 text-right">证据</th></tr></thead>
+    {printable && <colgroup>{['8%', '16%', '7%', '8%', '5%', '7%', '7%', '8%', '10%', '19%', '5%'].map((width, index) => <col key={index} style={{ width }} />)}</colgroup>}
+    <thead><tr className="border-b border-gray3 bg-bg"><th className="px-3 py-2">编码</th><th className="px-3 py-2">商品 / 规格</th><th className="px-3 py-2">库位</th><th className="px-3 py-2">添加方式</th><th className="px-3 py-2">单位</th><th className="px-3 py-2 text-right">账面</th><th className="px-3 py-2 text-right">实盘</th><th className="px-3 py-2 text-right">差异数量</th><th className="px-3 py-2 text-right">差异金额</th><th className="px-3 py-2">原因说明</th><th className="px-3 py-2 text-right">证据</th></tr></thead>
     <tbody>{(printable ? rows : items.map(fullPrintRow)).map(({ item, productText: printedProduct, reasonText: printedReason, continuation }, index) => <tr key={`${item.id}-${index}`} className="border-b border-border align-top">
-      <td className="px-3 py-2">{item.productCodeSnapshot || '—'}{continuation ? '（续）' : ''}</td><td className="px-3 py-2">{printedProduct || '（续）'}</td><td className="px-3 py-2">{item.unitSnapshot || '—'}</td><td className="px-3 py-2 text-right font-num">{continuation ? '—' : number(item.bookQuantity)}</td>
+      <td className="px-3 py-2">{item.productCodeSnapshot || '—'}{continuation ? '（续）' : ''}</td><td className="px-3 py-2">{printedProduct || '（续）'}</td><td className="px-3 py-2">{continuation ? '—' : item.storageLocationSnapshot || '—'}</td><td className="px-3 py-2">{continuation ? '—' : additionSourceLabel[item.additionSource] || item.additionSource}</td><td className="px-3 py-2">{item.unitSnapshot || '—'}</td><td className="px-3 py-2 text-right font-num">{continuation ? '—' : number(item.bookQuantity)}</td>
       <td className="px-3 py-2 text-right font-num">{continuation ? '—' : item.countedQuantity == null ? '未盘' : number(item.countedQuantity)}</td><td className="px-3 py-2 text-right font-num">{continuation ? '—' : item.differenceQuantity == null ? '—' : number(item.differenceQuantity)}</td><td className="px-3 py-2 text-right font-num">{continuation ? '—' : item.differenceAmount == null ? '—' : `¥${money(item.differenceAmount)}`}</td>
       <td className="px-3 py-2">{printedReason || '（续）'}</td><td className="px-3 py-2 text-right">{continuation ? '—' : `${evidenceCount(item)} 张`}</td>
     </tr>)}</tbody>
@@ -91,12 +93,11 @@ function PrintPage({ count, scope, rows, continuation = false, emptyText }: { co
 }
 
 export default function StocktakeReviewPrintPage({ params }: { params: { id: string } }) {
-  const searchParams = useSearchParams()
-  const warehouseSource = searchParams?.get('source') === 'warehouse'
   const [count, setCount] = useState<Count | null>(null)
   const [error, setError] = useState('')
   const [query, setQuery] = useState('')
   const [onlyDifference, setOnlyDifference] = useState(true)
+  const [exporting, setExporting] = useState(false)
   const [preparedPrint, setPreparedPrint] = useState<PreparedPrint | null>(null)
   const [fragmentProbe, setFragmentProbe] = useState<PrintRow | null>(null)
   const printMeasureRef = useRef<HTMLElement | null>(null)
@@ -109,14 +110,14 @@ export default function StocktakeReviewPrintPage({ params }: { params: { id: str
     let current = true
     setCount(null)
     setError('')
-    apiFetch<Count>(warehouseSource ? `/api/warehouse-stocktakes/${params.id}/review` : `/api/inventory-counts/${params.id}`)
+    apiFetch<Count>(`/api/warehouse-stocktakes/${encodeURIComponent(params.id)}/review`)
       .then(next => { if (current) setCount(next) })
       .catch(nextError => { if (current) setError(nextError.message || '盘点单加载失败') })
     return () => { current = false }
-  }, [params.id, warehouseSource])
+  }, [params.id])
 
   const items = useMemo(() => (count?.items || []).filter(item => {
-    const text = `${item.productCodeSnapshot || ''} ${item.productNameSnapshot || ''} ${item.productSpecSnapshot || ''}`.toLowerCase()
+    const text = `${item.productCodeSnapshot || ''} ${item.productNameSnapshot || ''} ${item.productSpecSnapshot || ''} ${item.storageLocationSnapshot || ''}`.toLowerCase()
     const matches = text.includes(query.trim().toLowerCase())
     // 未盘数量为 null，绝不把它当作零差异或零库存。
     return matches && (!onlyDifference || (item.countedQuantity != null && Number(item.differenceQuantity) !== 0))
@@ -250,6 +251,23 @@ export default function StocktakeReviewPrintPage({ params }: { params: { id: str
     if (!mountedRef.current || version !== printVersionRef.current) return
     window.print()
   }
+  const exportExcel = async () => {
+    setExporting(true)
+    setError('')
+    try {
+      const file = await apiFetch<{ filename: string; fileBase64: string }>(`/api/warehouse-stocktakes/${encodeURIComponent(params.id)}/export`)
+      const url = URL.createObjectURL(new Blob([Uint8Array.from(atob(file.fileBase64), character => character.charCodeAt(0))], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }))
+      const anchor = document.createElement('a')
+      anchor.href = url
+      anchor.download = file.filename
+      anchor.click()
+      setTimeout(() => URL.revokeObjectURL?.(url), 1000)
+    } catch (reason: any) {
+      setError(reason.message || '导出盘点明细失败')
+    } finally {
+      setExporting(false)
+    }
+  }
   useEffect(() => {
     // The native Cmd+P route does not call the button handler. beforeprint is
     // synchronous, so it can still replace the portal with measured page groups.
@@ -268,9 +286,9 @@ export default function StocktakeReviewPrintPage({ params }: { params: { id: str
   return <>
     <style>{`[data-stocktake-print], [data-stocktake-print-measure], [data-stocktake-fragment-measure] { color:#111; background:#fff; font-family:Arial, "PingFang SC", sans-serif; font-size:10pt; line-height:1.3 } [data-stocktake-print] h1, [data-stocktake-print-measure] h1, [data-stocktake-fragment-measure] h1 { margin:0; font-size:16pt; line-height:1.25 } [data-stocktake-print] p, [data-stocktake-print-measure] p, [data-stocktake-fragment-measure] p { margin:2px 0 } [data-stocktake-print] .stocktake-print-document-header, [data-stocktake-print-measure] .stocktake-print-document-header, [data-stocktake-fragment-measure] .stocktake-print-document-header { margin:0 0 16px } [data-stocktake-print] table, [data-stocktake-print-measure] table, [data-stocktake-fragment-measure] table { width:100%; table-layout:fixed; border-collapse:collapse; font-size:9pt } [data-stocktake-print] td, [data-stocktake-print] th, [data-stocktake-print-measure] td, [data-stocktake-print-measure] th, [data-stocktake-fragment-measure] td, [data-stocktake-fragment-measure] th { white-space:normal; overflow:visible; overflow-wrap:anywhere; text-overflow:clip; vertical-align:top; padding:2px 3px } @media screen { [data-stocktake-print] { display:none } [data-stocktake-print-measure], [data-stocktake-fragment-measure] { display:block; position:absolute; visibility:hidden; left:-100000px; top:0; width:1046px; padding:0; pointer-events:none } } @media print { @page { size:A4 landscape; margin:10mm } body > *:not([data-stocktake-print]) { display:none !important } body > [data-stocktake-print] { display:block !important; width:100% !important; padding:0 !important } body > [data-stocktake-print-measure], body > [data-stocktake-fragment-measure] { display:block !important; position:fixed !important; visibility:hidden !important; left:-100000px !important; top:0 !important; width:277mm !important; padding:0 !important; pointer-events:none !important } [data-stocktake-print] .stocktake-print-page { break-after:page; page-break-after:always } [data-stocktake-print] .stocktake-print-page:last-child { break-after:auto; page-break-after:auto } [data-stocktake-print] thead { display:table-header-group !important } [data-stocktake-print] tr { break-inside:avoid !important; page-break-inside:avoid !important } }`}</style>
     <main className="mx-auto max-w-6xl p-4 pb-24 text-gray1 lg:pb-4">
-      <header className="mb-4 flex flex-wrap items-start justify-between gap-3"><div><p className="text-caption text-gray3">供应链 / 盘点复盘（只读）</p><h1 className="text-h1">{count.no} · {count.store?.name || '—'}</h1><p className="text-caption text-gray3">盘点日期 {count.countDate} · 状态 {statusLabel(count.status)}</p></div><div className="flex items-center gap-3"><Link href="/v2/supply-chain/stocktake/count" className="text-caption underline">返回盘点管理</Link><button type="button" onClick={() => { void print() }} className="rounded-cta bg-amber px-4 py-2 text-white">打印复盘单</button></div></header>
+      <header className="mb-4 flex flex-wrap items-start justify-between gap-3"><div><p className="text-caption text-gray3">供应链 / 盘点复盘（只读）</p><h1 className="text-h1">{count.no} · 仓库：{count.warehouse?.name || '—'}</h1><p className="text-caption text-gray3">盘点日期 {count.countDate} · 状态 {statusLabel(count.status)}</p></div><div className="flex items-center gap-3"><Link href="/v2/supply-chain/stocktake/count" className="text-caption underline">返回盘点管理</Link><button type="button" disabled={exporting} onClick={() => { void exportExcel() }} className="rounded-cta border px-4 py-2">{exporting ? '导出中…' : '导出 Excel'}</button><button type="button" onClick={() => { void print() }} className="rounded-cta bg-amber px-4 py-2 text-white">打印复盘单</button></div></header>
       <section className="mb-3 flex flex-wrap gap-2"><input aria-label="搜索盘点商品" value={query} onChange={event => setQuery(event.target.value)} placeholder="搜索编码、名称、规格" className="rounded-cta border border-border px-3 py-2" /><button type="button" aria-pressed={onlyDifference} onClick={() => setOnlyDifference(true)} className="rounded-cta border px-3 py-2">仅看差异</button><button type="button" aria-pressed={!onlyDifference} onClick={() => setOnlyDifference(false)} className="rounded-cta border px-3 py-2">全部明细</button></section>
-      <section className="mb-3 rounded-card border border-border p-3 text-caption"><b>机构：</b>{count.store?.name || '—'}　<b>单号：</b>{count.no}　<b>日期：</b>{count.countDate}　<b>状态：</b>{statusLabel(count.status)}<br /><span>当前查看：{scope}；整单差异金额：¥{money(count.totalDifferenceValue)}（非当前筛选合计）</span></section>
+      <section className="mb-3 rounded-card border border-border p-3 text-caption"><b>仓库：</b>{count.warehouse?.name || '—'}　<b>单号：</b>{count.no}　<b>日期：</b>{count.countDate}　<b>状态：</b>{statusLabel(count.status)}<br /><span>当前查看：{scope}；整单差异金额：¥{money(count.totalDifferenceValue)}（非当前筛选合计）</span></section>
       <div className="overflow-x-auto"><ReviewTable items={items} /></div>
       {!items.length && <p className="py-8 text-center text-gray3">{emptyText}</p>}
     </main>

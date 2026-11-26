@@ -570,13 +570,33 @@
         "kind": "text"
       },
       {
+        "key": "review",
+        "label": "复审状态",
+        "kind": "text"
+      },
+      {
         "key": "difference",
         "label": "盘点差异",
         "kind": "text"
       },
       {
-        "key": "auditedAt",
-        "label": "审核日期",
+        "key": "submitter",
+        "label": "提交人",
+        "kind": "text"
+      },
+      {
+        "key": "submittedAt",
+        "label": "提交时间",
+        "kind": "text"
+      },
+      {
+        "key": "auditor",
+        "label": "审核人",
+        "kind": "text"
+      },
+      {
+        "key": "auditTime",
+        "label": "审核时间",
         "kind": "text"
       },
       {
@@ -592,6 +612,11 @@
       {
         "key": "creator",
         "label": "创建人",
+        "kind": "text"
+      },
+      {
+        "key": "remark",
+        "label": "备注",
         "kind": "text"
       }
     ],
@@ -637,6 +662,10 @@
       {
         "key": "countPlan",
         "label": "盘点方案编号"
+      },
+      {
+        "key": "review",
+        "label": "复审状态"
       }
     ]
   },
@@ -682,8 +711,23 @@
         "kind": "text"
       },
       {
-        "key": "auditedAt",
-        "label": "审核日期",
+        "key": "submitter",
+        "label": "提交人",
+        "kind": "text"
+      },
+      {
+        "key": "submittedAt",
+        "label": "提交时间",
+        "kind": "text"
+      },
+      {
+        "key": "auditor",
+        "label": "审核人",
+        "kind": "text"
+      },
+      {
+        "key": "auditTime",
+        "label": "审核时间",
         "kind": "text"
       },
       {
@@ -704,6 +748,11 @@
       {
         "key": "creator",
         "label": "创建人",
+        "kind": "text"
+      },
+      {
+        "key": "remark",
+        "label": "备注",
         "kind": "text"
       }
     ],

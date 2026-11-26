@@ -3,6 +3,16 @@ import { lossClaimScope } from '../../src/lib/loss-claim-scope'
 import { canHandleArrivalDifference } from '../../src/routes/lossClaims'
 
 describe('lossClaimScope', () => {
+  it('活动店只在已分配集合内收窄，越权拒绝', () => {
+    const user = { tenantId: 'tenant-a', role: 'MANAGER', storeIds: ['store-a', 'store-b'] }
+    expect(lossClaimScope(user, 'store-b')).toEqual({ tenantId: 'tenant-a', storeId: 'store-b' })
+    expect(() => lossClaimScope(user, 'foreign')).toThrow()
+    expect(() => lossClaimScope({ tenantId: 'tenant-a', role: 'KITCHEN_LEAD' }, 'store-b')).toThrow()
+  })
+
+  it.each(['ADMIN', 'FINANCE'])('活动头不收窄%s的集团范围', role => {
+    expect(lossClaimScope({ tenantId: 'tenant-a', role }, 'store-b')).toEqual({ tenantId: 'tenant-a' })
+  })
   it('集团角色只限定租户', () => {
     expect(lossClaimScope({ tenantId: 'tenant-a', role: 'CHEF_DIRECTOR' })).toEqual({
       tenantId: 'tenant-a',

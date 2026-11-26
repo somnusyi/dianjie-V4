@@ -1,16 +1,18 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import Fastify from 'fastify'
 import jwt from '@fastify/jwt'
-import { prisma } from '@dianjie/db'
+import { prisma, Prisma } from '@dianjie/db'
 import ExcelJS from 'exceljs'
 import { randomUUID } from 'crypto'
 import { inventoryReportRoutes } from '../src/routes/inventoryReports'
 import { reportIds } from '../src/services/inventoryReports'
 import fieldContract from '../src/services/report-field-contract.json'
 import { storeTransferRoutes } from '../src/routes/storeTransfers'
+import { confirmInventoryNetCostBasis } from '../src/services/inventoryNetCostBasis'
 
 const app = Fastify()
 let tenantId = '', otherTenantId = '', supplierId = '', productId = '', secondProductId = '', warehouseId = '', secondWarehouseId = '', fromStoreId = '', toStoreId = '', foreignStoreId = '', userId = ''
+let unknownProductId = ''
 let token = '', adminToken = '', supplierToken = '', foreignToken = '', financeToken = '', purchaserToken = ''
 const headers = (value = token) => ({ authorization: `Bearer ${value}` })
 const query = 'start=2026-09-01&end=2026-09-21'
@@ -32,13 +34,24 @@ const reopenPolicy = async(id=productId,wh=warehouseId)=>{
 const create = (overrides: any = {}) => app.inject({ method: 'POST', url: '/api/store-transfers', headers: headers(adminToken), payload: { fromStoreId, toStoreId, transferDate: '2026-09-21', requestKey: randomUUID(), items: [{ productId, quantity: 3, cost: 2, settlement: 2.5 }], ...overrides } })
 const transition = (id: string, status: string) => app.inject({ method: 'PATCH', url: `/api/store-transfers/${id}/status`, headers: headers(adminToken), payload: { status } })
 
+async function fixtureMovement(data: any, reliableOpening = false) {
+  const key = {tenantId,warehouseId:data.warehouseId,productId:data.productId}
+  const before = await prisma.warehouseLedgerBalance.upsert({where:{tenantId_warehouseId_productId:key},create:{...key,inventoryUnit:'kg'},update:{}})
+  const quantity = before.physicalQty.plus(data.physicalDelta), value = before.inventoryValue.plus(data.valueDelta)
+  const reserved = before.reservedQty.plus(data.reservedDelta ?? 0)
+  const movement = await prisma.warehouseLedgerMovement.create({data:{...data,physicalAfter:quantity,valueAfter:value,reservedAfter:reserved,averageUnitCostAfter:quantity.gt(0)?value.div(quantity):0}})
+  await prisma.warehouseLedgerBalance.update({where:{id:before.id},data:{physicalQty:quantity,reservedQty:reserved,inventoryValue:value,averageUnitCost:quantity.gt(0)?value.div(quantity):0}})
+  if(reliableOpening)await prisma.$transaction(tx=>confirmInventoryNetCostBasis(tx,{tenantId,movementId:movement.id,userId,requestKey:randomUUID(),expectedVersion:0,basisType:'ALREADY_NET',netValueDelta:movement.valueDelta,evidenceRefs:['document:REPORT-OPENING']}))
+  return movement
+}
+
 describe('inventory reports and persistent store transfers', () => {
   beforeAll(async () => {
     const suffix = randomUUID()
     const tenant = await prisma.tenant.create({ data: { name: '报表测试', slug: `reports-${suffix}` } }); tenantId = tenant.id
     const other = await prisma.tenant.create({ data: { name: '隔离租户', slug: `other-${suffix}` } }); otherTenantId = other.id
-    await prisma.warehouse.create({ data: { tenantId: otherTenantId, code: 'QA-DEFAULT', name: '隔离测试默认仓', isDefault: true } })
-    warehouseId = (await prisma.warehouse.create({ data: { tenantId, code: 'QA-DEFAULT', name: '测试默认仓', isDefault: true } })).id
+    await prisma.warehouse.update({ where: { tenantId_code: { tenantId: otherTenantId, code: 'default' } }, data: { name: '隔离测试默认仓' } })
+    warehouseId = (await prisma.warehouse.update({ where: { tenantId_code: { tenantId, code: 'default' } }, data: { name: '测试默认仓' } })).id
     secondWarehouseId = (await prisma.warehouse.create({ data: { tenantId, code: `SECOND-${suffix}`, name: '二号仓', isDefault: false, isActive: true } })).id
     const supplier = await prisma.supplier.create({ data: { tenantId, no: 'SUP', name: '测试供应商' } }); supplierId = supplier.id
     const product = await prisma.product.create({ data: { tenantId, supplierId: supplier.id, code: 'REPORT-01', name: '测试土豆', price: 3, unit: 'kg', inventoryUnit: 'kg', purchaseUnit: '箱', inventoryUnitsPerPurchaseUnit: 10, orderUnit: 'kg', costUnit: 'kg', inventoryUnitsPerOrderUnit: 1, inventoryUnitsPerCostUnit: 1, unitConversionStatus: 'VERIFIED', status: 'ENABLED' } }); productId = product.id
@@ -71,40 +84,43 @@ describe('inventory reports and persistent store transfers', () => {
       inventoryUnitsPerOrderUnitSnapshot: 1, inventoryUnitsPerPurchaseUnitSnapshot: 10, inventoryUnitsPerCostUnitSnapshot: 1,
       unitConversionStatusSnapshot: 'VERIFIED',
     } })
-    const firstDeliveryMovement = await prisma.warehouseLedgerMovement.create({ data: {
+    unknownProductId=(await prisma.product.create({data:{tenantId,supplierId,code:'REPORT-03',name:'待核定历史商品',price:3,unit:'kg',inventoryUnit:'kg',purchaseUnit:'kg',orderUnit:'kg',costUnit:'kg',inventoryUnitsPerPurchaseUnit:1,inventoryUnitsPerOrderUnit:1,inventoryUnitsPerCostUnit:1,unitConversionStatus:'VERIFIED'}})).id
+    for(const [w,q,v]of [[warehouseId,4,12],[secondWarehouseId,2,6]]as const)await fixtureMovement({tenantId,warehouseId:w,productId:secondProductId,type:'OPENING_BALANCE',effectiveAt:new Date('2026-08-31T15:00:00Z'),physicalDelta:q,valueDelta:v,originalQuantity:q,originalUnit:'kg',conversionFactor:1,inventoryQuantity:q,inventoryUnit:'kg',inventoryUnitCost:3,sourceType:'ReportOpening',sourceId:randomUUID(),idempotencyKey:randomUUID()},true)
+    for(const [storeId,quantity]of [[fromStoreId,20],[toStoreId,0]]as const)await prisma.inventorySnapshot.create({data:{tenantId,storeId,snapshotDate:new Date('2026-09-20Z'),sourceFilename:'门店期初成本.xlsx',totalValue:quantity*5,itemCount:2,nonzeroCount:quantity?2:0,zeroCount:quantity?0:2,matchedCount:2,items:{create:[{productId,rawName:'测试土豆',unit:'kg',quantity,normalizedQuantity:quantity,normalizedUnit:'kg',normalizationStatus:'EXACT',unitPrice:2,amount:quantity*2,sortOrder:0},{productId:secondProductId,rawName:'测试红薯',unit:'kg',quantity,normalizedQuantity:quantity,normalizedUnit:'kg',normalizationStatus:'EXACT',unitPrice:3,amount:quantity*3,sortOrder:1}]}}})
+    const firstDeliveryMovement = await fixtureMovement({
       tenantId, warehouseId, productId: secondProductId, type: 'ORDER_OUTBOUND', effectiveAt: new Date('2026-09-20T02:00:00Z'),
       physicalDelta: -2, valueDelta: -6, physicalAfter: 2, reservedAfter: 0, valueAfter: 6, averageUnitCostAfter: 3,
       originalQuantity: 2, originalUnit: 'kg', conversionFactor: 1, inventoryQuantity: 2, inventoryUnit: 'kg', inventoryUnitCost: 3,
       sourceType: 'DeliveryOrder', sourceId: delivery.id, sourceLineId: deliveryPurchaseItem.id, idempotencyKey: `profit-a-${suffix}`,
-    } })
-    const secondDeliveryMovement = await prisma.warehouseLedgerMovement.create({ data: {
+    })
+    const secondDeliveryMovement = await fixtureMovement({
       tenantId, warehouseId: secondWarehouseId, productId: secondProductId, type: 'ORDER_OUTBOUND', effectiveAt: new Date('2026-09-20T02:01:00Z'),
       physicalDelta: -2, valueDelta: -6, physicalAfter: 0, reservedAfter: 0, valueAfter: 0, averageUnitCostAfter: 3,
       originalQuantity: 2, originalUnit: 'kg', conversionFactor: 1, inventoryQuantity: 2, inventoryUnit: 'kg', inventoryUnitCost: 3,
       sourceType: 'DeliveryOrder', sourceId: delivery.id, sourceLineId: deliveryPurchaseItem.id, idempotencyKey: `profit-b-${suffix}`,
-    } })
+    })
     for (const [index, sourceType, sourceLineId, sourceWarehouseId, effectiveAt] of [
       [0, 'DeliveryOrderShipCancel', firstDeliveryMovement.id, warehouseId, '2026-09-20T02:10:00Z'],
       [1, 'ReceiptRejectionReversal', firstDeliveryMovement.id, warehouseId, '2026-09-20T02:11:00Z'],
       [2, 'LossClaimReversal', secondDeliveryMovement.id, secondWarehouseId, '2026-10-01T02:12:00Z'],
     ] as const) {
-      await prisma.warehouseLedgerMovement.create({ data: {
+      await fixtureMovement({
         tenantId, warehouseId: sourceWarehouseId, productId: secondProductId, type: 'REVERSAL', effectiveAt: new Date(effectiveAt),
         physicalDelta: 0.25, valueDelta: 0.75, physicalAfter: 0.25 * (index + 1), reservedAfter: 0, valueAfter: 0.75 * (index + 1), averageUnitCostAfter: 3,
         originalQuantity: 0.25, originalUnit: 'kg', conversionFactor: 1, inventoryQuantity: 0.25, inventoryUnit: 'kg', inventoryUnitCost: 3,
         sourceType, sourceId: `${sourceType}-${suffix}`, sourceLineId, idempotencyKey: `profit-reversal-${index}-${suffix}`,
-      } })
+      })
     }
-    await prisma.warehouseLedgerMovement.create({ data: {
-      tenantId, warehouseId, productId, type: 'REVERSAL', effectiveAt: new Date('2026-10-02T02:12:00Z'),
+    await fixtureMovement({
+      tenantId, warehouseId, productId:unknownProductId, type: 'REVERSAL', effectiveAt: new Date('2026-10-02T02:12:00Z'),
       physicalDelta: 0.25, valueDelta: 0.75, physicalAfter: 0.25, reservedAfter: 0, valueAfter: 0.75, averageUnitCostAfter: 3,
       originalQuantity: 0.25, originalUnit: 'kg', conversionFactor: 1, inventoryQuantity: 0.25, inventoryUnit: 'kg', inventoryUnitCost: 3,
       sourceType: 'ReceiptRejectionReversal', sourceId: `wrong-product-${suffix}`, sourceLineId: firstDeliveryMovement.id, idempotencyKey: `profit-wrong-product-${suffix}`,
-    } })
+    })
     for (const [date, qty, value, type] of [['2026-08-31T15:59:59Z', 10, 20, 'OPENING_BALANCE'], ['2026-08-31T16:00:00Z', 5, 15, 'MANUAL_INBOUND'], ['2026-09-21T15:59:59Z', -2, -4, 'ORDER_OUTBOUND'], ['2026-09-21T16:00:00Z', 99, 198, 'MANUAL_INBOUND']] as const) {
-      await prisma.warehouseLedgerMovement.create({ data: { tenantId, warehouseId, productId, type, effectiveAt: new Date(date), physicalDelta: qty, valueDelta: value, physicalAfter: 0, reservedAfter: 0, valueAfter: 0, averageUnitCostAfter: 0, originalQuantity: qty === 5 ? 0.5 : Math.abs(qty), originalUnit: qty === 5 ? '箱' : 'kg', conversionFactor: qty === 5 ? 10 : 1, inventoryQuantity: Math.abs(qty), inventoryUnit: 'kg', sourceType: qty === 5 ? 'WarehouseManualInbound' : 'ReportFixture', sourceId: randomUUID(), idempotencyKey: randomUUID() } })
+      await fixtureMovement({ tenantId, warehouseId, productId, type, effectiveAt: new Date(date), physicalDelta: qty, valueDelta: value, physicalAfter: 0, reservedAfter: 0, valueAfter: 0, averageUnitCostAfter: 0, originalQuantity: qty === 5 ? 0.5 : Math.abs(qty), originalUnit: qty === 5 ? '箱' : 'kg', conversionFactor: qty === 5 ? 10 : 1, inventoryQuantity: Math.abs(qty), inventoryUnit: 'kg', sourceType: qty === 5 ? 'WarehouseManualInbound' : 'ReportFixture', sourceId: randomUUID(), idempotencyKey: randomUUID() }, type === 'OPENING_BALANCE')
     }
-    await prisma.warehouseLedgerBalance.create({ data: { tenantId, warehouseId, productId, inventoryUnit: 'kg', physicalQty: 112, reservedQty: 2, inventoryValue: 229, averageUnitCost: 2.044643 } })
+    await fixtureMovement({tenantId,warehouseId,productId,type:'ORDER_RESERVED',effectiveAt:new Date('2026-09-22Z'),physicalDelta:0,reservedDelta:2,valueDelta:0,originalQuantity:2,originalUnit:'kg',conversionFactor:1,inventoryQuantity:2,inventoryUnit:'kg',sourceType:'ReportReservation',sourceId:randomUUID(),idempotencyKey:randomUUID()})
     await app.register(jwt, { secret: 'inventory-report-integration-secret-only' })
     app.decorate('authenticate', async (req: any) => { await req.jwtVerify() })
     await app.register(inventoryReportRoutes, { prefix: '/api/inventory-reports' }); await app.register(storeTransferRoutes, { prefix: '/api/store-transfers' })
@@ -116,10 +132,15 @@ describe('inventory reports and persistent store transfers', () => {
     if (!tenantId) return
     await prisma.warehouseInventoryPolicyRevisionEvent.deleteMany({where:{tenantId}})
     await prisma.warehouseInventoryPolicyRevision.deleteMany({where:{tenantId}})
+    await prisma.storeTransferMovement.deleteMany({where:{tenantId}})
+    await prisma.inventorySnapshot.deleteMany({where:{tenantId}})
+    for(const confirmation of await prisma.warehouseNetCostBasisConfirmation.findMany({where:{tenantId},orderBy:{version:'desc'}}))await prisma.warehouseNetCostBasisConfirmation.delete({where:{id:confirmation.id}})
     await prisma.storeTransferItem.deleteMany({ where: { transfer: { tenantId } } }); await prisma.storeTransfer.deleteMany({ where: { tenantId } })
     await prisma.warehouseInventoryPolicyEvent.deleteMany({ where: { tenantId } }); await prisma.warehouseInventoryPolicy.deleteMany({ where: { tenantId } })
     await prisma.warehouseLedgerMovement.deleteMany({ where: { tenantId } }); await prisma.warehouseLedgerBalance.deleteMany({ where: { tenantId } })
+    await prisma.deliveryOrderItem.deleteMany({where:{deliveryOrder:{tenantId}}});await prisma.purchaseOrderItem.deleteMany({where:{purchaseOrder:{tenantId}}})
     await prisma.deliveryOrder.deleteMany({ where: { tenantId } }); await prisma.purchaseOrder.deleteMany({ where: { tenantId } })
+    await prisma.opLog.deleteMany({where:{tenantId}})
     await prisma.product.deleteMany({ where: { tenantId } }); await prisma.user.deleteMany({ where: { tenantId } }); await prisma.supplier.deleteMany({ where: { tenantId } })
     await prisma.store.deleteMany({ where: { tenantId: { in: [tenantId, otherTenantId] } } }); await prisma.warehouse.deleteMany({ where: { tenantId: { in: [tenantId, otherTenantId] } } }); await prisma.tenant.deleteMany({ where: { id: { in: [tenantId, otherTenantId] } } })
   })
@@ -143,7 +164,7 @@ describe('inventory reports and persistent store transfers', () => {
   })
   it('reconciles Shanghai date boundaries and preserves complete balances with type filters', async () => {
     const response = await report('summary'); expect(response.statusCode).toBe(200)
-    const row = response.json().rows[0]; expect(row).toMatchObject({ openingQty: 10, openingAmount: 20, inQty: 5, inAmount: 15, outQty: 2, outAmount: 4, closingQty: 13, closingAmount: 31 })
+    const row = response.json().rows[0]; expect(row).toMatchObject({ openingQty: 10, openingAmount: 20, inQty: 5, inAmount: null, outQty: 2, outAmount: null, closingQty: 13, closingAmount: null, costStatus: 'PENDING_COST' })
     expect((await report('summary', `&type=${encodeURIComponent('出库')}`)).json().rows[0]).toMatchObject({ openingQty: 10, closingQty: 13 })
   })
   it('does not mislabel unknown tax values, validates dates and numeric ranges', async () => {
@@ -152,13 +173,13 @@ describe('inventory reports and persistent store transfers', () => {
     const deliveryRows = rows.filter((r: any) => r.code === 'REPORT-02')
     expect(deliveryRows).toHaveLength(4)
     expect(deliveryRows.filter((r: any) => r.type === '出库')).toHaveLength(2)
-    expect(deliveryRows.filter((r: any) => r.type === '出库')[0]).toMatchObject({ outQty: 2, outPrice: 3, outAmount: 6, outSettlementPrice: 5, outSettlementAmount: 10, outProfit: 4 })
+    expect(deliveryRows.filter((r: any) => r.type === '出库')[0]).toMatchObject({ outQty: 2, outPrice: 3, outAmount: 6, outSettlementPrice: 5, outSettlementAmount: 10, outProfit: null, profitStatus: 'PENDING_TAX_BASIS' })
     expect(deliveryRows.filter((r: any) => r.type === '冲销')).toHaveLength(2)
-    expect(deliveryRows.filter((r: any) => r.type === '冲销')[0]).toMatchObject({ inQty: 0.25, inAmount: 0.75, outSettlementPrice: 5, outSettlementAmount: -1.25, outProfit: -0.5 })
+    expect(deliveryRows.filter((r: any) => r.type === '冲销')[0]).toMatchObject({ inQty: 0.25, inAmount: 0.75, outSettlementPrice: 5, outSettlementAmount: -1.25, outProfit: null, profitStatus: 'PENDING_TAX_BASIS' })
     expect(deliveryRows.reduce((sum: number, row: any) => sum + row.outQty - row.inQty, 0)).toBe(3.5)
     expect(deliveryRows.reduce((sum: number, row: any) => sum + row.outAmount - (row.inAmount || 0), 0)).toBe(10.5)
     expect(deliveryRows.reduce((sum: number, row: any) => sum + row.outSettlementAmount, 0)).toBe(17.5)
-    expect(deliveryRows.reduce((sum: number, row: any) => sum + row.outProfit, 0)).toBe(7)
+    expect(deliveryRows.every((row:any)=>row.outProfit===null&&row.profitStatus==='PENDING_TAX_BASIS')).toBe(true)
     expect((await report('realtime', '&ranges=not-json')).statusCode).toBe(400)
     expect((await app.inject({ url: '/api/inventory-reports/summary?start=2026-02-30&end=2026-09-21', headers: headers() })).statusCode).toBe(400)
     expect((await report('realtime', `&ranges=${encodeURIComponent(JSON.stringify({ amount: { min: 230 } }))}`)).json().total).toBe(0)
@@ -172,22 +193,22 @@ describe('inventory reports and persistent store transfers', () => {
       quantity: rows.reduce((sum, row) => sum + row.outQty - row.inQty, 0),
       cost: rows.reduce((sum, row) => sum + row.outAmount - (row.inAmount || 0), 0),
       settlement: rows.reduce((sum, row) => sum + row.outSettlementAmount, 0),
-      profit: rows.reduce((sum, row) => sum + row.outProfit, 0),
+      profit: rows.every(row=>row.outProfit===null&&row.profitStatus==='PENDING_TAX_BASIS')?null:'INVALID',
     })
     const september = (await request('2026-09-01', '2026-09-30')).json().rows.filter((row: any) => row.code === 'REPORT-02')
-    expect(totals(september)).toEqual({ quantity: 3.5, cost: 10.5, settlement: 17.5, profit: 7 })
+    expect(totals(september)).toEqual({ quantity: 3.5, cost: 10.5, settlement: 17.5, profit: null })
     const october = (await request('2026-10-01', '2026-10-02')).json().rows.filter((row: any) => row.code === 'REPORT-02')
     expect(october).toHaveLength(1)
-    expect(october[0]).toMatchObject({ warehouse: '二号仓', type: '冲销', inQty: 0.25, inAmount: 0.75, outSettlementAmount: -1.25, outProfit: -0.5 })
+    expect(october[0]).toMatchObject({ warehouse: '二号仓', type: '冲销', inQty: 0.25, inAmount: 0.75, outSettlementAmount: -1.25, outProfit: null, profitStatus: 'PENDING_TAX_BASIS' })
     const fullRows = (await request('2026-09-01', '2026-10-02')).json().rows
     const full = fullRows.filter((row: any) => row.code === 'REPORT-02')
-    expect(totals(full)).toEqual({ quantity: 3.25, cost: 9.75, settlement: 16.25, profit: 6.5 })
+    expect(totals(full)).toEqual({ quantity: 3.25, cost: 9.75, settlement: 16.25, profit: null })
     const wrongProductReversal = fullRows.find((row: any) => row.doc?.startsWith('wrong-product-'))
-    expect(wrongProductReversal).toMatchObject({ code: 'REPORT-01', inAmount: null, outSettlementAmount: null, outSettlementPrice: null, outProfit: null })
+    expect(wrongProductReversal).toMatchObject({ code: 'REPORT-03', inAmount: null, outSettlementAmount: null, outSettlementPrice: null, outProfit: null })
     const firstWarehouse = (await request('2026-09-01', '2026-09-30', warehouseId)).json().rows.filter((row: any) => row.code === 'REPORT-02')
-    expect(totals(firstWarehouse)).toEqual({ quantity: 1.5, cost: 4.5, settlement: 7.5, profit: 3 })
+    expect(totals(firstWarehouse)).toEqual({ quantity: 1.5, cost: 4.5, settlement: 7.5, profit: null })
     const secondWarehouse = (await request('2026-09-01', '2026-09-30', secondWarehouseId)).json().rows.filter((row: any) => row.code === 'REPORT-02')
-    expect(totals(secondWarehouse)).toEqual({ quantity: 2, cost: 6, settlement: 10, profit: 4 })
+    expect(totals(secondWarehouse)).toEqual({ quantity: 2, cost: 6, settlement: 10, profit: null })
   })
   it('rejects foreign stores, duplicates and invalid state transitions; retry is idempotent', async () => {
     expect((await create({ toStoreId: foreignStoreId })).statusCode).toBe(400)
@@ -204,7 +225,7 @@ describe('inventory reports and persistent store transfers', () => {
     expect((await transition(row.id, 'RECEIVED')).statusCode).toBe(200)
     const reread = (await app.inject({ url: '/api/store-transfers', headers: headers() })).json()[0]
     expect(reread.status).toBe('RECEIVED'); expect(reread.createdById).toBe(userId); expect(reread.shippedById).toBe(userId)
-    expect((await report('transfer-detail')).json().rows[0]).toMatchObject({ date: '2026-09-21', transferQty: 3, outAmount: 6, inAmount: 7.5, org: '调出门店', target: '调入门店' })
+    expect((await report('transfer-detail')).json().rows[0]).toMatchObject({ date: '2026-09-21', transferQty: 3, outAmount: 6, inAmount: 6, org: '调出门店', target: '调入门店' })
     expect((await app.inject({ url: `/api/store-transfers/${row.id}/status`, method: 'PATCH', headers: headers(foreignToken), payload: { status: 'SHIPPED' } })).statusCode).toBe(404)
   })
   it('normalizes item order and decimals, and safely serializes concurrent idempotent creates', async () => {
@@ -236,13 +257,14 @@ describe('inventory reports and persistent store transfers', () => {
     expect([one.statusCode, two.statusCode].sort()).toEqual([201, 409])
     expect(await prisma.storeTransfer.count({ where: { tenantId, requestKey: conflictingKey } })).toBe(1)
   })
-  it('aggregates weighted prices before filtering, excludes revoked and pending transfers', async () => {
+  it('aggregates frozen same-store costs before filtering, excludes revoked and pending transfers', async () => {
     const second = (await create({ items: [{ productId, quantity: 1, cost: 6, settlement: 7.5 }] })).json()
-    await transition(second.id, 'SHIPPED')
+    expect((await transition(second.id, 'SHIPPED')).statusCode).toBe(200)
+    expect((await transition(second.id, 'RECEIVED')).statusCode).toBe(200)
     const revoked = (await create()).json(); expect((await transition(revoked.id, 'REVOKED')).statusCode).toBe(200)
     expect((await transition(revoked.id, 'SHIPPED')).statusCode).toBe(409)
     const row = (await report('transfer-summary', `&ranges=${encodeURIComponent(JSON.stringify({ transferQty: { min: 4 } }))}`)).json().rows[0]
-    expect(row).toMatchObject({ transferQty: 4, outAmount: 12, inAmount: 15, cost: 3, settlement: 3.75 })
+    expect(row).toMatchObject({ transferQty: 4, outAmount: 8, inAmount: 8, cost: 2, settlement: 2 })
     expect((await report('transfer-detail', '', foreignToken)).json().total).toBe(0)
   })
   it('exports all filtered rows with the same numbers as the report', async () => {
@@ -259,13 +281,17 @@ describe('inventory reports and persistent store transfers', () => {
     const deliveryRows = (await report('movements')).json().rows.filter((row: any) => row.code === 'REPORT-02')
     expect(deliveryRows.reduce((sum: number, row: any) => sum + row.outAmount - (row.inAmount || 0), 0)).toBe(10.5)
     expect(deliveryRows.reduce((sum: number, row: any) => sum + row.outSettlementAmount, 0)).toBe(17.5)
-    expect(deliveryRows.reduce((sum: number, row: any) => sum + row.outProfit, 0)).toBe(7)
-    expect((await report('realtime')).json().rows[0]).toMatchObject({ conversion: 1, qty: 112, amount: 229, price: 2.044643 })
-    expect((await report('summary')).json().rows[0]).toMatchObject({ openingPrice: 2, inPrice: 3, outPrice: 2 })
+    expect(deliveryRows.every((row:any)=>row.outProfit===null&&row.profitStatus==='PENDING_TAX_BASIS')).toBe(true)
+    expect((await report('realtime')).json().rows[0]).toMatchObject({ conversion: 1, qty: 112, amount: null, price: null, costStatus: 'PENDING_COST' })
+    expect((await report('summary')).json().rows[0]).toMatchObject({ openingPrice: 2, inPrice: null, outPrice: null })
+    const known=(await report('realtime')).json().rows.filter((row:any)=>row.code==='REPORT-02')
+    expect(known.find((row:any)=>row.warehouse==='测试默认仓')).toMatchObject({qty:2.5,amount:7.5,price:3,costStatus:'KNOWN'})
+    expect(known.find((row:any)=>row.warehouse==='二号仓')).toMatchObject({qty:0.25,amount:0.75,price:3,costStatus:'KNOWN'})
+    expect((await report('summary',`&warehouseId=${warehouseId}`)).json().rows.find((row:any)=>row.code==='REPORT-02')).toMatchObject({openingQty:4,openingAmount:12,inQty:0.5,inAmount:1.5,outQty:2,outAmount:6,closingQty:2.5,closingAmount:7.5,closingPrice:3})
   })
   it('serves other movements, stagnation and alerts with tenant and role isolation', async () => {
-    expect((await report('other-summary')).json().rows[0]).toMatchObject({ baseUnit: 'kg', quantity: 5, amount: 15, type: '手工入库' })
-    expect((await report('stagnant', '&stagnantDays=36500')).json().rows[0]).toMatchObject({ qty: 112, stagnantDays: 30, lastInQty: 0.25, lastOutQty: 2 })
+    expect((await report('other-summary')).json().rows[0]).toMatchObject({ baseUnit: 'kg', quantity: 5, amount: null, costStatus: 'PENDING_COST', type: '手工入库' })
+    expect((await report('stagnant', '&stagnantDays=36500')).json().rows[0]).toMatchObject({ qty: 112, stagnantDays: 30, lastInQty: 99, lastOutQty: 2 })
     expect((await report('alerts')).json().rows[0]).toMatchObject({ qty: 112, minQty: null, maxQty: null, alertStatus: '阈值未配置' })
     expect((await report('stagnant', '&stagnantDays=0')).statusCode).toBe(400)
     for (const id of ['other-summary', 'stagnant', 'alerts']) {
@@ -364,7 +390,7 @@ describe('inventory reports and persistent store transfers', () => {
       expect(book.worksheets[0].getRow(1).values).toEqual([undefined, ...plain.columns.map((c: any) => c.label)])
       for (const [i, row] of plain.rows.entries()) {
         expect(row.seq).toBe(i + 1)
-        for (const [j, col] of plain.columns.entries()) expect(book.worksheets[0].getRow(i + 2).getCell(j + 1).value ?? null).toEqual(row[col.key] ?? null)
+        for (const [j, col] of plain.columns.entries()) expect(book.worksheets[0].getRow(i + 2).getCell(j + 1).value ?? null).toEqual(row[col.key] == null && (col.key==='outProfit'&&row.profitStatus==='PENDING_TAX_BASIS'||['realtime','summary','movements','other-summary'].includes(id)&&row.costStatus==='PENDING_COST'&&['amount','price','openingAmount','openingPrice','inAmount','inPrice','outAmount','outPrice','closingAmount','closingPrice'].includes(col.key))?'待核算':row[col.key]??null)
       }
     }
     expect((await report('movements', '&pageSize=1&page=2')).json().rows[0].seq).toBe(2)

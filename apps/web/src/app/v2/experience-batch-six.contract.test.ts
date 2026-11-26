@@ -25,7 +25,7 @@ describe('操作体验批次六契约', () => {
     expect(invoices).not.toContain("schedule.status !== 'PAID'")
     expect(invoices).toContain('已逾期')
     expect(procurement).toContain('purchaseOrderOverdueText(order)')
-    expect(procurement).toContain("'SETTLEMENT_PENDING', 'CLOSED'")
+    expect(read('../../lib/purchase-order-overdue.ts')).toContain("'SETTLEMENT_PENDING', 'CLOSED'")
     expect(stock).toContain('Number(batch.remainingQty) > 0 ? expiryState(batch.expiryDate) : null')
   })
 

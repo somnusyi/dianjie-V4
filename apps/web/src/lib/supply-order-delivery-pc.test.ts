@@ -82,6 +82,10 @@ describe('buildOrderQuery', () => {
 })
 
 describe('buildDeliveryQuery', () => {
+  it('serializes an explicit delivery date field while ordered date remains the default', () => {
+    expect(buildDeliveryQuery({ ...DEFAULT_DELIVERY_FILTERS, dateFrom: '2026-11-01' })).not.toContain('dateField=')
+    expect(buildDeliveryQuery({ ...DEFAULT_DELIVERY_FILTERS, dateField: 'SHIPPED', dateFrom: '2026-11-01' })).toContain('dateField=SHIPPED')
+  })
   it('encodes default filters with page and pageSize only', () => {
     const query = buildDeliveryQuery(DEFAULT_DELIVERY_FILTERS)
     expect(query).toBe('?page=1&pageSize=20')
@@ -99,6 +103,7 @@ describe('buildDeliveryQuery', () => {
       keyword: 'PS2026',
       storeId: 'store-2',
       status: 'SHIPPED',
+      sort: 'STORE_NAME_ASC',
       dateFrom: '2026-07-05',
       dateTo: '2026-07-20',
       page: 2,
@@ -107,6 +112,7 @@ describe('buildDeliveryQuery', () => {
     expect(query).toContain('keyword=PS2026')
     expect(query).toContain('storeId=store-2')
     expect(query).toContain('status=SHIPPED')
+    expect(query).toContain('sort=STORE_NAME_ASC')
     expect(query).toContain('dateFrom=2026-07-05')
     expect(query).toContain('dateTo=2026-07-20')
     expect(query).toContain('page=2')
@@ -417,7 +423,7 @@ describe('projectOrderRow', () => {
     expect(projected.status).toBe('SUBMITTED')
     expect(projected.expectedDeliveryDate).toBe('2026-07-02T00:00:00.000Z')
     expect((projected as any).estimatedArrivalAt).toBeUndefined()
-    expect(projected.store).toEqual({ id: 's1', name: '门店A', no: 'S01' })
+    expect(projected.store).toEqual({ id: 's1', name: '门店A', no: 'S01', brandCode: null })
     expect(projected.supplier).toEqual({ id: 'sup1', name: '供应商A', no: 'SUP01' })
     expect(projected.submittedSnapshotItems).toHaveLength(2)
   })

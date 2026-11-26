@@ -24,12 +24,12 @@ type Msg = { id: string; role: 'user' | 'assistant' | 'system'; content: string;
 type Detail = MineItem & { reporter: { id: string; name: string; role: string }; messages: Msg[] }
 
 const STATUS_LABEL: Record<string, string> = {
-  CLARIFYING: '沟通中', AWAITING_APPROVAL: '待审批', APPROVED: '已批准',
+  CLARIFYING: '沟通中', AWAITING_APPROVAL: '已记录', APPROVED: '已批准',
   IN_DEV: '开发中', RESOLVED: '已解决', REJECTED: '已驳回', CLOSED: '已闭环',
 }
 const STATUS_COLOR: Record<string, { bg: string; color: string }> = {
   CLARIFYING: { bg: '#eff6ff', color: '#2563eb' },
-  AWAITING_APPROVAL: { bg: '#fffbeb', color: '#d97706' },
+  AWAITING_APPROVAL: { bg: '#f3f4f6', color: '#6b7280' },
   APPROVED: { bg: '#edfaf3', color: '#156b43' },
   IN_DEV: { bg: '#edfaf3', color: '#156b43' },
   RESOLVED: { bg: '#edfaf3', color: '#156b43' },

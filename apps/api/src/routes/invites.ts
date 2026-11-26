@@ -3,6 +3,7 @@ import { z } from 'zod'
 import bcrypt from 'bcryptjs'
 import crypto from 'crypto'
 import { prisma } from '@dianjie/db'
+import { isStoreBrandRole, isValidStoreBrandAssignment } from '../lib/store-brand-assignment'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
 
@@ -47,10 +48,11 @@ export const inviteRoutes: FastifyPluginAsync = async (app) => {
 
     // 多店归一：storeIds 优先，回退单店字段；去重保序
     const storeIds = [...new Set(d.storeIds?.length ? d.storeIds : (d.storeId ? [d.storeId] : []))]
-    if (STORE_BOUND_ROLES.has(d.role)) {
-      if (storeIds.length === 0) return reply.status(400).send({ error: '该角色必须绑定门店' })
-      const stores = await prisma.store.findMany({ where: { id: { in: storeIds }, tenantId, status: 'ENABLED' }, select: { id: true } })
+    if (STORE_BOUND_ROLES.has(d.role) && storeIds.length === 0) return reply.status(400).send({ error: '该角色必须绑定门店' })
+    if (storeIds.length > 0 && isStoreBrandRole(d.role)) {
+      const stores = await prisma.store.findMany({ where: { id: { in: storeIds }, tenantId, status: 'ENABLED' }, select: { id: true, brandCode: true } })
       if (stores.length !== storeIds.length) return reply.status(400).send({ error: '门店不存在' })
+      if (!isValidStoreBrandAssignment(d.role, stores)) return reply.status(400).send({ error: '门店岗位只能绑定同一品牌的门店' })
     }
     if (SUPPLIER_BOUND_ROLES.has(d.role)) {
       if (!d.supplierId) return reply.status(400).send({ error: '该角色必须绑定供应商' })
@@ -193,8 +195,9 @@ export const inviteAcceptRoutes: FastifyPluginAsync = async (app) => {
         if (!tenant) return { status: 400, error: '所属租户已停用' }
         const invStoreIds = inv.storeIds?.length ? inv.storeIds : (inv.storeId ? [inv.storeId] : [])
         if (invStoreIds.length > 0) {
-          const stores = await tx.store.findMany({ where: { id: { in: invStoreIds }, tenantId: inv.tenantId, status: 'ENABLED' }, select: { id: true } })
+          const stores = await tx.store.findMany({ where: { id: { in: invStoreIds }, tenantId: inv.tenantId, status: 'ENABLED' }, select: { id: true, brandCode: true } })
           if (stores.length !== invStoreIds.length) return { status: 400, error: '邀请关联门店不存在或已停用' }
+          if (!isValidStoreBrandAssignment(inv.role, stores)) return { status: 400, error: '邀请关联门店跨品牌，请重新邀请' }
         }
         if (inv.supplierId) {
           const supplier = await tx.supplier.findFirst({ where: { id: inv.supplierId, tenantId: inv.tenantId, status: 'ENABLED' }, select: { id: true } })

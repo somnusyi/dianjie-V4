@@ -13,10 +13,10 @@ import { routeFor, DocumentType, Role } from '../services/documentRouting'
 import { applyReceiptCorrection } from '../services/receiptCorrection'
 import { nextDocumentNo } from '../services/documentNo'
 import { invalidatePattern } from '../lib/cache'
-import { isSupplierRole } from '../lib/auth-scope'
+import { isSupplierRole, storeScopeOf } from '../lib/auth-scope'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
-const GROUP_DOCUMENT_ROLES = new Set(['BOSS', 'ADMIN', 'SUPER_ADMIN', 'FINANCE', 'CHEF_DIRECTOR', 'CHEF', 'ENGINEERING'])
+const GROUP_DOCUMENT_ROLES = new Set(['BOSS', 'ADMIN', 'SUPER_ADMIN', 'FINANCE', 'CHEF_DIRECTOR', 'ENGINEERING'])
 const SUPPLIER_OFFER_DOCUMENT_TYPES = new Set(['NEW_DISH', 'SUPPLIER_OFFER_CREATE', 'SUPPLIER_OFFER_DISABLE'])
 
 /** 把当前用户的角色映射到能批的 step.role 集合（处理 BOSS/ADMIN/CHEF 别名）*/
@@ -169,12 +169,14 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
   // ── inbox: 待当前角色审批的步骤 + 单据 ─────────────────────
   app.get('/inbox', auth(app), async (req: any) => {
     const { tenantId, role, userId } = req.user
+    const storeScope = storeScopeOf(req.user)
+    if (storeScope !== null && storeScope.length === 0) return []
     const roles = [...approverRolesFor(role)]
     const steps = await prisma.documentStep.findMany({
       where: {
         status: 'PENDING',
         approverRole: { in: roles },
-        document: { tenantId, status: 'PENDING' },
+        document: { tenantId, status: 'PENDING', ...(storeScope !== null ? { storeId: { in: storeScope } } : {}) },
       },
       include: {
         document: {
@@ -222,16 +224,17 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
       },
     })
     if (!doc) return reply.status(404).send({ error: '单据不存在' })
+    const storeScope = storeScopeOf(req.user)
+    if (storeScope !== null && (!doc.storeId || !storeScope.includes(doc.storeId))) {
+      return reply.status(403).send({ error: '无权查看其他门店或集团单据' })
+    }
     // 集团角色 (BOSS/ADMIN/SUPER_ADMIN/FINANCE/CHEF_DIRECTOR) 全可见
     if (GROUP_DOCUMENT_ROLES.has(role)) return { ...doc, attachments: [] }
     // 发起人/审批人始终可见
     if (doc.initiatorId === userId) return { ...doc, attachments: [] }
     if (doc.steps.some(s => s.approverId === userId)) return { ...doc, attachments: [] }
-    // 店长只看自己店
-    if (role === 'MANAGER' || role === 'KITCHEN_LEAD') {
-      if (doc.storeId && doc.storeId === storeId) return { ...doc, attachments: [] }
-      return reply.status(403).send({ error: '无权查看其他门店或集团单据' })
-    }
+    // 门店角色已通过上方的多店范围校验。
+    if (storeScope !== null) return { ...doc, attachments: [] }
     // 供应商: 优先按 supplierId；兼容历史单时严格比对当前租户供应商名称。
     if (isSupplierRole(role)) {
       if (await supplierCanViewPayload(tenantId, supplierId, doc.payload)) return { ...doc, attachments: [] }
@@ -253,15 +256,15 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
     const { tenantId, role, userId, storeId, supplierId } = req.user
     const doc = await prisma.document.findFirst({ where: { id: req.params.id, tenantId } })
     if (!doc) return reply.status(404).send({ error: '单据不存在' })
+    const storeScope = storeScopeOf(req.user)
+    if (storeScope !== null && (!doc.storeId || !storeScope.includes(doc.storeId))) {
+      return reply.status(403).send({ error: '无权预览其他门店或集团单据' })
+    }
     if (!GROUP_DOCUMENT_ROLES.has(role) && doc.initiatorId !== userId) {
       const approvedByUser = await prisma.documentStep.count({
         where: { documentId: doc.id, approverId: userId },
       })
-      if (approvedByUser === 0 && (role === 'MANAGER' || role === 'KITCHEN_LEAD')) {
-        if (!doc.storeId || doc.storeId !== storeId) {
-          return reply.status(403).send({ error: '无权预览其他门店或集团单据' })
-        }
-      } else if (approvedByUser === 0 && isSupplierRole(role)) {
+      if (approvedByUser === 0 && isSupplierRole(role)) {
         if (!await supplierCanViewPayload(tenantId, supplierId, doc.payload)) {
           return reply.status(403).send({ error: '无权预览其他供应商单据' })
         }
@@ -371,6 +374,23 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
     const { tenantId, userId, storeId } = req.user
     const { type, title, amount, payload, storeId: bodyStoreId } = req.body as any
     if (!type || !title) return reply.status(400).send({ error: 'type 和 title 必填' })
+    const storeScope = storeScopeOf(req.user)
+    const targetStoreId = bodyStoreId || storeId || null
+    if (storeScope !== null && (!targetStoreId || !storeScope.includes(targetStoreId))) {
+      return reply.status(403).send({ error: '只能为所属门店创建单据' })
+    }
+    if (targetStoreId && !await prisma.store.findFirst({ where: { id: targetStoreId, tenantId }, select: { id: true } })) {
+      return reply.status(400).send({ error: '门店不存在或不属于当前租户' })
+    }
+    if (type === 'RECEIPT_CORRECTION') {
+      const receiptId = payload?.receiptId
+      const receipt = typeof receiptId === 'string'
+        ? await prisma.receipt.findFirst({ where: { id: receiptId, tenantId }, select: { storeId: true } })
+        : null
+      if (!receipt || !targetStoreId || receipt.storeId !== targetStoreId) {
+        return reply.status(403).send({ error: '更正单必须归属对应入库门店' })
+      }
+    }
 
     const plan = routeFor(type as DocumentType, Number(amount || 0))
 
@@ -384,7 +404,7 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
           isOverThreshold: plan.isOverThreshold,
           thresholdRule: plan.thresholdRule || null,
           payload: payload || {},
-          storeId: bodyStoreId || storeId || null,
+          storeId: targetStoreId,
           initiatorId: userId,
           status: plan.autoApprove ? 'AUTO_APPROVED' : 'PENDING',
           finalizedAt: plan.autoApprove ? new Date() : null,
@@ -416,6 +436,7 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
   // ── 审批决策 ────────────────────────────────────────────
   app.post('/:id/decisions', auth(app), async (req: any, reply) => {
     const { tenantId, userId, role } = req.user
+    const storeScope = storeScopeOf(req.user)
     const { id } = req.params as any
     const { decision, comment } = req.body as any
     if (!['APPROVE', 'REJECT'].includes(decision)) {
@@ -433,6 +454,9 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
           include: { steps: { orderBy: { seq: 'asc' } } },
         })
         if (!doc) throw Object.assign(new Error('单据不存在或已终结'), { statusCode: 404 })
+        if (storeScope !== null && (!doc.storeId || !storeScope.includes(doc.storeId))) {
+          throw Object.assign(new Error('无权审批其他门店或集团单据'), { statusCode: 403 })
+        }
 
         const current = doc.steps.find(step => step.status === 'PENDING')
         if (!current) throw Object.assign(new Error('无待审步骤'), { statusCode: 400 })
@@ -471,7 +495,7 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
               throw Object.assign(new Error('更正单缺少可执行的更正明细'), { statusCode: 409 })
             }
             await applyReceiptCorrection(tx, {
-              tenantId, plan, userId, role, documentNo: doc.no,
+              tenantId, plan, userId, role, documentNo: doc.no, expectedStoreId: doc.storeId,
             })
           }
           await tx.document.update({
@@ -500,6 +524,7 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
   // ── 撤回（发起人）────────────────────────────────────────
   app.patch('/:id/cancel', auth(app), async (req: any, reply) => {
     const { tenantId, userId } = req.user
+    const storeScope = storeScopeOf(req.user)
     const id = req.params.id as string
     try {
       const touchedProducts = await prisma.$transaction(async tx => {
@@ -508,6 +533,9 @@ export const documentRoutes: FastifyPluginAsync = async (app) => {
           where: { id, tenantId, status: 'PENDING', initiatorId: userId },
         })
         if (!doc) throw Object.assign(new Error('单据不存在或不可撤回'), { statusCode: 404 })
+        if (storeScope !== null && (!doc.storeId || !storeScope.includes(doc.storeId))) {
+          throw Object.assign(new Error('无权撤回其他门店或集团单据'), { statusCode: 403 })
+        }
         const touched = await applyProductDecision(tx, doc, tenantId, 'REJECT')
         await tx.document.update({
           where: { id: doc.id }, data: { status: 'CANCELED', finalizedAt: new Date() },

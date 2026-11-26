@@ -5,10 +5,8 @@ export const inventoryReports = [
 ]
 export function InventoryReportMenu({ selected }: { selected: boolean }) {
   return <WorkspaceMenu openOnly id="inventory-report-flyout" title="库存报表" description="库存管理与验收、库存查询与报表" icon="仓" selected={selected}
-    href="/v2/supply-chain/inventory" items={[{ title: '库存管理与验收', href: '/v2/supply-chain/inventory' }, ...inventoryReports.map(report => ({ title: report.title, href: `/v2/supply-chain/reports?report=${report.id}` }))]}
+    href="/v2/supply-chain/inventory" items={[{ title: '库存查询', href: '/v2/supply-chain/inventory' }, ...inventoryReports.map(report => ({ title: report.title, href: `/v2/supply-chain/reports?report=${report.id}` }))]}
     shortcuts={[
       { title: '总仓自损', href: '/v2/supply-chain/inventory/loss' },
-      { title: '入库记录', href: '/v2/supply-chain/inbound' },
-      { title: '单据审核', href: '/v2/supply-chain/docs' },
     ]} />
 }

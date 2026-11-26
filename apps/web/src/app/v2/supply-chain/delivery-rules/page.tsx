@@ -7,7 +7,7 @@
 import { SearchableSelect } from '@/components/v2/searchable-select'
 import { useEffect, useMemo, useState } from 'react'
 import { apiFetch } from '@/lib/v2-auth'
-import { deliveryScheduleText, isDeliveryScheduleDate, nextDeliveryScheduleDates } from '@/lib/delivery-rule-cycle'
+import { deliveryOrderDayProjection, deliveryScheduleText, isDeliveryScheduleDate, nextDeliveryScheduleDates } from '@/lib/delivery-rule-cycle'
 import dayjs from '@/lib/business-dayjs'
 import { confirmDialog } from '@/lib/ui-dialogs'
 
@@ -43,9 +43,7 @@ function dateText(value: string | null) {
 }
 
 function arrivalDateText(day: number) {
-  if (day === 1) return '下单后次日送达'
-  if (day === 2) return '下单后隔日送达'
-  return `下单后第${day}日送达`
+  return `下单后第 ${day} 个送货日到货`
 }
 
 type Form = {
@@ -75,6 +73,7 @@ export default function DeliveryRulesPage() {
   const [formError, setFormError] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [calendarMonth, setCalendarMonth] = useState(() => dayjs().format('YYYY-MM'))
+  const [calendarRuleId, setCalendarRuleId] = useState('')
 
   async function load() {
     setLoading(true)
@@ -86,6 +85,9 @@ export default function DeliveryRulesPage() {
         apiFetch<Supplier[]>('/api/suppliers'),
       ])
       setRules(ruleRows || [])
+      setCalendarRuleId(current => (ruleRows || []).some(rule => rule.id === current)
+        ? current
+        : (ruleRows || []).find(rule => rule.status === 'ENABLED')?.id || (ruleRows || [])[0]?.id || '')
       setStores(storeRows || [])
       setSuppliers(supplierRows || [])
     } catch (reason: any) {
@@ -203,30 +205,32 @@ export default function DeliveryRulesPage() {
     }
   }
 
-  // 月历：两种规则都统一计算为送货日。
+  const calendarRule = rules.find(rule => rule.id === calendarRuleId) || null
+
+  // 一次只查看一条线路，避免不同线路的送货日混在同一张月历里。
   const calendar = useMemo(() => {
     const monthStart = dayjs(`${calendarMonth}-01`)
     const daysInMonth = monthStart.daysInMonth()
     const firstWeekday = (monthStart.day() + 6) % 7 // 周一开头
-    const cells: { key: string; day: number; deliveryRules: Rule[] }[] = []
-    for (let i = 0; i < firstWeekday; i += 1) cells.push({ key: `blank-${i}`, day: 0, deliveryRules: [] })
+    const cells: { key: string; day: number; delivery: boolean; order: ReturnType<typeof deliveryOrderDayProjection> }[] = []
+    for (let i = 0; i < firstWeekday; i += 1) cells.push({ key: `blank-${i}`, day: 0, delivery: false, order: null })
     for (let day = 1; day <= daysInMonth; day += 1) {
       const key = monthStart.date(day).format('YYYY-MM-DD')
-      const dayRules = rules.filter(rule => rule.status === 'ENABLED'
-        && isDeliveryScheduleDate(rule, key)
-        && (!rule.effectiveFrom || key >= dayjs(rule.effectiveFrom).format('YYYY-MM-DD'))
-        && (!rule.effectiveTo || key <= dayjs(rule.effectiveTo).format('YYYY-MM-DD')))
-      cells.push({ key, day, deliveryRules: dayRules })
+      const delivery = Boolean(calendarRule && calendarRule.status === 'ENABLED'
+        && isDeliveryScheduleDate(calendarRule, key)
+        && (!calendarRule.effectiveFrom || key >= dayjs(calendarRule.effectiveFrom).format('YYYY-MM-DD'))
+        && (!calendarRule.effectiveTo || key <= dayjs(calendarRule.effectiveTo).format('YYYY-MM-DD')))
+      cells.push({ key, day, delivery, order: calendarRule ? deliveryOrderDayProjection(calendarRule, key) : null })
     }
     return cells
-  }, [rules, calendarMonth])
+  }, [calendarRule, calendarMonth])
 
   return (
     <div className="mx-auto max-w-6xl p-4">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-h1">配送班表</h1>
-          <p className="mt-1 text-micro text-gray3">送货日可选择“按间隔”或“按每周”设置；第一个送货日按下单后次日送达，到货期与适用门店统一按班表执行。</p>
+          <p className="mt-1 text-micro text-gray3">送货日可选择“按间隔”或“按每周”设置；到货期按下单后的第几个送货日计算，并与适用门店统一按班表执行。</p>
         </div>
         <button onClick={openCreate} className="h-11 rounded-cta bg-accent px-5 text-button text-white">+ 新建班表</button>
       </div>
@@ -252,6 +256,7 @@ export default function DeliveryRulesPage() {
               <td className="px-4 py-3 text-micro">{dateText(rule.effectiveFrom)} ~ {dateText(rule.effectiveTo)}</td>
               <td className="px-4 py-3">{rule.status === 'ENABLED' ? <span className="text-green-fg">启用中</span> : <span className="text-gray3">已停用</span>}</td>
               <td className="px-4 py-3">
+                <button onClick={() => setCalendarRuleId(rule.id)} className="mr-3 text-button text-accent underline">查看班表</button>
                 <button onClick={() => openEdit(rule)} className="mr-3 text-button text-accent underline">编辑</button>
                 <button onClick={() => toggleStatus(rule)} className="text-button text-gray2 underline">{rule.status === 'ENABLED' ? '停用' : '启用'}</button>
               </td>
@@ -262,15 +267,29 @@ export default function DeliveryRulesPage() {
       </div>
 
       <div className="mt-4 rounded-card border border-border bg-white p-4">
-        <div className="flex items-center justify-between">
-          <div><h2 className="text-h2">送货月历</h2><p className="mt-0.5 text-micro text-gray3">按当前班表规则显示送货日期</p></div>
-          <input type="month" value={calendarMonth} onChange={event => setCalendarMonth(event.target.value)} className="h-10 rounded-cta border border-border px-3" />
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div><h2 className="text-h2">线路班表{calendarRule ? ` · ${calendarRule.name}` : ''}</h2><p className="mt-0.5 text-micro text-gray3">一次只显示一条线路；每天明确标出下单时段、对应到货日和送货日</p></div>
+          <div className="flex gap-2">
+            <select aria-label="选择线路班表" value={calendarRuleId} onChange={event => setCalendarRuleId(event.target.value)} className="h-10 min-w-44 rounded-cta border border-border bg-white px-3">
+              <option value="">选择线路</option>
+              {rules.map(rule => <option key={rule.id} value={rule.id}>{rule.name}{rule.status === 'DISABLED' ? '（已停用）' : ''}</option>)}
+            </select>
+            <input type="month" value={calendarMonth} onChange={event => setCalendarMonth(event.target.value)} className="h-10 rounded-cta border border-border px-3" />
+          </div>
         </div>
+        {calendarRule && <div className="mt-3 grid gap-2 rounded-cta bg-bg p-3 text-caption sm:grid-cols-2">
+          <div><span className="text-gray3">下单规则：</span>{calendarRule.orderWindowStart ? `每日 ${calendarRule.orderWindowStart}～${calendarRule.orderWindowEnd}` : '全天可下单'}</div>
+          <div><span className="text-gray3">送货规则：</span>{deliveryScheduleText(calendarRule)}，{arrivalDateText(calendarRule.leadDays)}</div>
+        </div>}
         <div className="mt-3 grid grid-cols-7 gap-px overflow-hidden rounded-cta border border-border bg-border text-center text-micro">
           {WEEKDAYS.map(day => <div key={day.value} className="bg-bg py-2 text-gray3">周{day.label}</div>)}
           {calendar.map(cell => <div key={cell.key} className={`min-h-16 bg-white p-1.5 text-left ${cell.day === 0 ? 'invisible' : ''}`}>
             <div className="text-micro text-gray3">{cell.day || ''}</div>
-            {cell.deliveryRules.map(rule => <div key={`delivery-${rule.id}`} className="mt-1 truncate rounded bg-orange-bg px-1.5 py-0.5 text-micro text-orange-fg" title={`${rule.name} · 送货日 · ${rule.stores.length} 家门店`}>{rule.name} · 送货</div>)}
+            {cell.order && <div className="mt-1 rounded bg-green-bg px-1.5 py-0.5 text-micro text-green-fg" title={`下单日 ${cell.order.windowLabel} → ${dayjs(cell.order.arrivalDate).format('M/D')} 到货`}>
+              <div>下单日 {cell.order.windowLabel}</div>
+              <div>→ {dayjs(cell.order.arrivalDate).format('M/D')} 送货</div>
+            </div>}
+            {cell.delivery && calendarRule && <div className="mt-1 truncate rounded bg-orange-bg px-1.5 py-0.5 text-micro text-orange-fg" title={`${calendarRule.name} · 送货日 · ${calendarRule.stores.length} 家门店`}>送货日</div>}
           </div>)}
         </div>
       </div>

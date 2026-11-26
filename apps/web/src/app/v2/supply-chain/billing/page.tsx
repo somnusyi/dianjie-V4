@@ -3,7 +3,6 @@ import businessDayjs from '@/lib/business-dayjs'
 import { SearchableSelect } from '@/components/v2/searchable-select'
 
 import {billingStatusLabel} from './status-label'
-import { businessMonthKey } from '@/lib/business-date'
 import { loadInvoices } from '@/lib/invoice-list'
 import { useEffect, useMemo, useState } from 'react'
 import { Chip } from '@/components/v2'
@@ -73,20 +72,6 @@ export default function InternalSupplyChainBillingPage() {
       .finally(() => setLoading(false))
   }, [])
 
-  const stats = useMemo(() => {
-    const open = schedules.filter(item => item.status !== 'PAID' && item.status !== 'CANCELLED')
-    const overdue = open.filter(item => new Date(item.dueAt).getTime() < Date.now())
-    const paidThisMonth = schedules.filter(item => item.status === 'PAID'
-      && item.paidAt
-      && businessMonthKey(item.paidAt) === businessMonthKey())
-    return {
-      open: open.reduce((sum, item) => sum + Number(item.amount), 0),
-      overdue: overdue.reduce((sum, item) => sum + Number(item.amount), 0),
-      paid: paidThisMonth.reduce((sum, item) => sum + Number(item.amount), 0),
-      pendingInvoices: invoices.filter(item => item.status === 'PENDING').length,
-    }
-  }, [schedules, invoices])
-
   const invalidRange=tab==='schedule'&&Boolean(dateFrom&&dateTo&&dateFrom>dateTo)
   const filteredSchedules = useMemo(() => schedules.filter(item => {
     const storeName = item.receipt?.store?.name || ''
@@ -118,13 +103,6 @@ export default function InternalSupplyChainBillingPage() {
       </header>
 
       {error && <div className="mt-4 rounded-card border border-red/30 bg-red-bg p-3 text-caption text-red-fg">{error}</div>}
-      <section className="grid gap-3 py-5 sm:grid-cols-2 xl:grid-cols-4">
-        <Metric label="未付账期" value={dataReady ? money(stats.open) : '—'} />
-        <Metric label="其中逾期" value={dataReady ? money(stats.overdue) : '—'} tone="red" />
-        <Metric label="本月已付" value={dataReady ? money(stats.paid) : '—'} />
-        <Metric label="待审发票" value={loading || error ? '—' : `${stats.pendingInvoices} 张`} />
-      </section>
-
       <div className="mb-4 flex flex-wrap gap-2">
         <Tab active={tab === 'schedule'} onClick={() => { setTab('schedule'); setDetail(null) }}>账期 {dataReady ? schedules.length : '—'}</Tab>
         <Tab active={tab === 'reconciliation'} onClick={() => { setTab('reconciliation'); setDetail(null) }}>对账单 {dataReady ? reconciliations.length : '—'}</Tab>
@@ -223,10 +201,6 @@ export default function InternalSupplyChainBillingPage() {
       )}
     </div>
   )
-}
-
-function Metric({ label, value, tone }: { label: string; value: string; tone?: 'red' }) {
-  return <div className="rounded-card border border-border bg-white p-4"><div className="text-caption text-gray3">{label}</div><div className={`mt-1 font-num text-h1 ${tone === 'red' ? 'text-red-fg' : ''}`}>{value}</div></div>
 }
 
 function Tab({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {

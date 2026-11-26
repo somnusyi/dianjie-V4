@@ -16,6 +16,7 @@ const STORE_SCOPED_ROLES = new Set([
   'KITCHEN_LEAD',   // v2 厨师长 (单店级)
   'SUPERVISOR',     // 主管 (同店长机制, 允许多店)
   'REGIONAL_MANAGER', // 区域经理 (指派门店集合, 机制同店长)
+  'STAFF', // 门店一线员工
 ])
 
 export function isStoreScoped(role: string | undefined | null): boolean {

@@ -351,9 +351,9 @@ it('detail totals follow decimal row edits and invalid input never turns into a 
  const {element,root}=mount();await wait(()=>Boolean(element.querySelector('tfoot')))
  try{
   const total=()=>element.querySelector('tfoot')!.textContent!
-  expect(total()).toContain('2.000000');expect(total()).toContain('0.3000')
+  expect(total()).toContain('2.000000');expect(total()).toContain('0.30')
   change(element.querySelector('input[aria-label="1行quantity"]')!,'5')
-  expect(total()).toContain('6.000000');expect(total()).toContain('0.7000')
+  expect(total()).toContain('6.000000');expect(total()).toContain('0.70')
   change(element.querySelector('input[aria-label="1行quantity"]')!,'')
   expect(total()).toContain('—');expect(mock.mock.calls.every(([,init])=>!init?.method)).toBe(true)
  }finally{act(()=>root.unmount());element.remove()}
@@ -452,7 +452,8 @@ it('partial return preview caps rounded proportion at remaining source amount wi
  act(()=>root.render(<ProcurementDocumentEditor kind="RETURN" sourceId="new" supplierId="sup-1" warehouseId="wh-1" onClose={()=>{}}/>))
  await wait(()=>Boolean(element.querySelector('footer')))
  change(element.querySelector('input[aria-label="1行quantity"]')!,'1.9999')
- expect(element.querySelector('tbody tr')?.textContent).toContain('0.3332')
+ expect(element.querySelector('tbody tr')?.textContent).toContain('0.33')
+ expect(element.querySelector('tbody span[title="0.3332"]')).not.toBeNull()
  expect(element.querySelector<HTMLInputElement>('input[aria-label="1行quantity"]')?.value).toBe('1.9999')
  expect(mock.mock.calls.every(([,init])=>!init?.method)).toBe(true)
  act(()=>root.unmount());element.remove()
@@ -509,4 +510,13 @@ it('a successfully saved return ends recovery so the same supplier and warehouse
   const contextCalls=mock.mock.calls.filter(([path])=>String(path).includes('create-context'))
   expect(new URL(String(contextCalls.at(-1)![0]),'http://localhost').searchParams.get('requestKey')).not.toBe(savedKey)
  }finally{act(()=>root.unmount());element.remove()}
+})
+it('keeps different purchasing units separate in the quantity footer and follows edited values',async()=>{
+ mock.mockResolvedValue({...original,lines:[original.lines[0],{...original.lines[0],id:'line-2',purchaseUnit:'kg',inventoryUnit:'kg',inventoryUnitsPerPurchaseUnit:1,acceptedQty:40,arrivedQty:40,payableAmount:400,purchaseOrderLine:{productCodeSnapshot:'SKU2',productNameSnapshot:'竹荪'}}]})
+ const {element,root}=mount();await wait(()=>Boolean(element.querySelector('tfoot')))
+ expect(element.querySelector('tfoot')?.textContent).toContain('2.000000 袋、40.000000 kg')
+ change(element.querySelector('input[aria-label="2行quantity"]')!,'30')
+ expect(element.querySelector('tfoot')?.textContent).toContain('2.000000 袋、30.000000 kg')
+ expect(element.querySelector('tfoot')?.textContent).not.toContain('合计32')
+ act(()=>root.unmount());element.remove()
 })

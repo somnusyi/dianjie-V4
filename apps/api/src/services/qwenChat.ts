@@ -18,8 +18,8 @@ export interface QwenChatMessage {
   content: string | QwenContentPart[]
 }
 
-export const QWEN_BUSY_FALLBACK = 'AI 助手暂时繁忙，你的反馈已记录，管理员会尽快处理'
-export const QWEN_NOT_CONFIGURED = 'AI 助手暂未配置，你的反馈已记录，管理员会直接人工处理，无需重复提交'
+export const QWEN_BUSY_FALLBACK = 'AI 助手暂时繁忙，你的反馈已记录，可在“我的反馈”查看并继续补充'
+export const QWEN_NOT_CONFIGURED = 'AI 助手暂未配置，你的反馈已记录，可在“我的反馈”查看，无需重复提交'
 
 const DEFAULT_BASE_URL = 'https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1'
 const DEFAULT_MODEL = 'qwen3.8-max-preview'

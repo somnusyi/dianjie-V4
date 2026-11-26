@@ -27,8 +27,8 @@ const initial = (withDate: boolean) => {
 }
 const stocktakeDetailKeys=['productCodeSnapshot','productNameSnapshot','productSpecSnapshot','unitSnapshot','bookQuantity','countedQuantity','differenceQuantity','differenceAmount','reasonNote']
 const stocktakeDetailLabels=['物品编码','物品名称','规格型号','单位','账面数量','实盘数量','差异数量','差异金额','差异原因']
-const selects = new Set(['org', 'warehouse', 'supplier', 'status', 'review', 'printed', 'difference', 'generated', 'reconciliation', 'invoice', 'stockStatus', 'category', 'countType', 'reason', 'supplierAccount'])
-const knownOptions: Record<string, string[]> = { printed: ['未打印', '已打印'], generated: ['是', '否'], difference: ['未盘完', '有差异', '无差异'] }
+const selects = new Set(['org', 'warehouse', 'supplier', 'status', 'review', 'printed', 'difference', 'reconciliation', 'invoice', 'stockStatus', 'category', 'countType', 'reason', 'supplierAccount'])
+const knownOptions: Record<string, string[]> = { printed: ['未打印', '已打印'], difference: ['未盘完', '有差异', '无差异'] }
 const display = (value: string | number | null | undefined, kind: string, key = '') => value == null || value === '' ? '—' : /(amount|value)$/i.test(key) ? Number(value).toLocaleString('zh-CN',{minimumFractionDigits:2,maximumFractionDigits:2}) : kind === 'number' ? Number(value).toLocaleString('zh-CN', { maximumFractionDigits: 6 }) : value
 
 export function ManagementWorkspace({ config }: { config: ManagementPage }) {
@@ -144,9 +144,7 @@ export function ManagementWorkspace({ config }: { config: ManagementPage }) {
   const stocktakeId = (row: ManagementRow) => String(row.detailId || row.id).replace(/^warehouse:/, '')
   async function selectedDocuments(targets = selectedRows()) {
     return Promise.all(targets.map(row => apiFetch<{ no: string; countDate: string; items: Array<Record<string, string | number | null>> }>(
-      row.recordType === 'WAREHOUSE_STOCKTAKE'
-        ? `/api/warehouse-stocktakes/${encodeURIComponent(stocktakeId(row))}/review`
-        : `/api/inventory-counts/${encodeURIComponent(String(row.id))}`,
+      `/api/warehouse-stocktakes/${encodeURIComponent(stocktakeId(row))}/review`,
     ))).then(docs=>docs.map(doc=>({...doc,countDate:doc.countDate.slice(0,10)})))
   }
   async function exportDocuments(targets = selectedRows()) {
@@ -169,9 +167,9 @@ export function ManagementWorkspace({ config }: { config: ManagementPage }) {
       setPrinting(false)
     } catch (e: any) { setError(e.message || '打印准备失败'); setPrinting(false) }
   }
-  function batchTransition(action: 'submit' | 'approve' | 'final-review', targets = selectedRows(), single = false) {
-    const label = action === 'submit' ? '提交' : action === 'final-review' ? '复盘审核' : '审核'
-    openConfirmation({ title: `${single ? '盘点单' : '批量'}${label}`, body: `将${label}所选的${targets.length}张总仓盘点单。${action === 'final-review' ? '复盘审核后才改变库存和金额，完成后不能取消。' : action === 'approve' ? '审核只改变状态，复盘审核后才改变库存和金额。' : '各分区必须已完成并提交。'}每张单据独立处理，失败会列出单号并停止后续处理。`, confirmLabel: `确认${label}`, layerClassName: 'z-[100]', onConfirm: async () => {
+  function batchTransition(action: 'submit' | 'approve' | 'final-review' | 'generate', targets = selectedRows(), single = false) {
+    const label = action === 'submit' ? '提交' : action === 'final-review' ? '复盘审核' : action === 'generate' ? '生成盘点单' : '审核'
+    openConfirmation({ title: `${single ? '' : '批量'}${label}`, body: action === 'generate' ? `将所选${targets.length}张已审核的多人盘点单各自生成一张正式盘点单。生成后多人单保留不变，正式单进入待审核。` : `将${label}所选的${targets.length}张总仓盘点单。${action === 'final-review' ? '复盘审核后才改变库存和金额，完成后不能取消。' : action === 'approve' ? '审核只改变状态，复盘审核后才改变库存和金额。' : '各分区必须已完成并提交。'}每张单据独立处理，失败会列出单号并停止后续处理。`, confirmLabel: `确认${label}`, layerClassName: 'z-[100]', onConfirm: async () => {
       setBatchBusy(true); setBatchMessage(''); setFailedStocktakeHref(''); setError('')
       let completed = 0
       try {
@@ -181,8 +179,9 @@ export function ManagementWorkspace({ config }: { config: ManagementPage }) {
             const current = await apiFetch<{ rowVersion: number; status: string }>(`/api/warehouse-stocktakes/${encodeURIComponent(id)}`)
             if (action === 'submit' && !['DRAFT', 'COUNTING'].includes(current.status)) throw new Error('当前状态不能提交，请刷新核对')
             if (action === 'final-review' && current.status !== 'CONFIRMED') throw new Error('请先审核盘点单')
+            if (action === 'generate' && current.status !== 'CONFIRMED') throw new Error('多人盘点单审核后才能生成盘点单')
             if (action === 'approve' && current.status !== 'REVIEWING') throw new Error('只有待审核单据可以审核')
-            await apiFetch(`/api/warehouse-stocktakes/${encodeURIComponent(id)}/${action}`, { method: 'POST', body: JSON.stringify(action === 'submit' ? { rowVersion: current.rowVersion } : {}) })
+            await apiFetch(`/api/warehouse-stocktakes/${encodeURIComponent(id)}/${action === 'generate' ? 'generate-formal' : action}`, { method: 'POST', body: JSON.stringify(action === 'submit' ? { rowVersion: current.rowVersion } : {}) })
             completed++
           } catch (e: any) {
             setFailedStocktakeHref(`/v2/supply-chain/stocktake/work?doc=${encodeURIComponent(id)}&from=${config.id==='multi-count'?'multi-count':'count'}`)
@@ -212,9 +211,6 @@ export function ManagementWorkspace({ config }: { config: ManagementPage }) {
     if (row.recordType === 'UPSTREAM_RETURN') return inventoryDocumentHref(`/v2/supply-chain/procurement/returns/${encodeURIComponent(String(row.detailId))}/edit`,config.id)
     if (row.recordType === 'WAREHOUSE_STOCKTAKE') return `/v2/supply-chain/stocktake/work?doc=${encodeURIComponent(String(row.detailId))}&from=${config.id}`
     if (config.id === 'purchase-return') return `/v2/supply-chain/procurement?return=${encodeURIComponent(String(row.id))}`
-    if (config.id === 'count' && row.recordType !== 'IMPORTED_BASELINE') return String(row.id).startsWith('warehouse:')
-      ? `/v2/supply-chain/stocktake/count/${String(row.id).slice(10)}?source=warehouse`
-      : `/v2/supply-chain/stocktake/count/${row.id}`
     return null
   }
   const dialogTitle = dialog === 'columns' ? '表格设置' : dialog === 'org' ? '选择机构' : dialog === 'logs' ? '操作日志' : dialog === 'help' ? '常见问题' : '记录信息'
@@ -246,8 +242,9 @@ export function ManagementWorkspace({ config }: { config: ManagementPage }) {
       <div className={styles.toolbar}><div className={styles.actions}>
         {isStocktake ? <>
           <Link href={`/v2/supply-chain/stocktake/work?create=1&from=${config.id}${result?.warehouseOptions?.find(warehouse=>`warehouse:${warehouse.id}`===draft.filters.warehouse)?`&warehouseId=${encodeURIComponent(result.warehouseOptions.find(warehouse=>`warehouse:${warehouse.id}`===draft.filters.warehouse)!.id)}`:''}`} className={styles.primary}>＋ 批次盘点</Link>
+          {config.id === 'multi-count' && <button className={styles.primary} disabled={batchDisabled || !canBatchWrite || !onlyWarehouse || selectedRows().some(row => row.status !== '已审核' || row.generated !== '否')} onClick={() => batchTransition('generate')}>生成盘点单</button>}
           <button disabled={batchDisabled} onClick={() => void printSelectedDocuments()}>批量打印</button>
-          <button disabled={batchDisabled || !canBatchWrite || !onlyWarehouse || selectedRows().some(row => !['草稿', '盘点中'].includes(String(row.status)))} title={!onlyWarehouse ? '门店来源单据请在原页面处理' : undefined} onClick={() => batchTransition('submit')}>批量提交</button>
+          <button disabled={batchDisabled || !canBatchWrite || !onlyWarehouse || selectedRows().some(row => !['草稿', '盘点中'].includes(String(row.status)))} onClick={() => batchTransition('submit')}>批量提交</button>
           <button disabled={batchDisabled || !canBatchWrite || !onlyWarehouse || selectedRows().some(row => row.status !== '待审核')} onClick={() => batchTransition('approve')}>批量审核</button>
           <span title="本轮不实施盘点反审核"><button disabled>批量反审核</button></span>
           <button disabled={batchDisabled} onClick={() => void exportDocuments()}>批量导出</button>
@@ -270,7 +267,8 @@ export function ManagementWorkspace({ config }: { config: ManagementPage }) {
             {columns.map(c => <td key={c.key} className={`${c.kind === 'number' ? styles.numeric : ''} ${fixedColumn(c.key)}`} title={row[c.key] == null ? '尚未记录' : String(row[c.key])}>{c.key === 'no' ? <>{detailHref(row) ? <Link className={styles.textButton} href={detailHref(row)!}>{display(row[c.key], c.kind, c.key)}</Link> : <span>{display(row[c.key], c.kind, c.key)}</span>}{row.source && <span className={`${styles.badge} ml-2`}>{row.source}</span>}</> : config.id === 'count' && c.key === 'difference' && Number(row.differenceCount) > 0 ? <span className={styles.differenceCount}>{row.differenceCount}项差异</span> : ['status', 'review'].includes(c.key) && row[c.key] ? <span className={styles.badge}>{row[c.key]}</span> : display(row[c.key], c.kind, c.key)}</td>)}
             {showOperation && <td className={styles.operation}>{config.id === 'multi-count' ? <div className={styles.rowActions}>
               {row.recordType === 'WAREHOUSE_STOCKTAKE' && canBatchWrite && ['草稿','盘点中','待提交'].includes(String(row.status)) && <button className={styles.textButton} disabled={loading || printing || exporting || batchBusy} onClick={()=>batchTransition('submit',[row],true)}>提交</button>}
-              {row.recordType === 'WAREHOUSE_STOCKTAKE' && canBatchWrite && row.status === '已审核' && row.docReviewStatus !== 'REVIEWED' && <button className={styles.textButton} disabled={loading || batchBusy} onClick={()=>batchTransition('final-review',[row],true)}>复盘审核</button>}
+              {row.recordType === 'WAREHOUSE_STOCKTAKE' && canBatchWrite && row.status === '已审核' && row.generated === '否' && <button className={styles.textButton} disabled={loading || batchBusy} onClick={()=>batchTransition('generate',[row],true)}>生成盘点单</button>}
+              {row.generated === '是' && row.generatedStocktakeId && <Link className={styles.textButton} href={`/v2/supply-chain/stocktake/count/${encodeURIComponent(String(row.generatedStocktakeId))}`}>查看盘点单</Link>}
               {row.recordType === 'WAREHOUSE_STOCKTAKE' && canBatchWrite && ['草稿','盘点中','待提交','待审核'].includes(String(row.status)) && <button className={styles.textButton} disabled={String(row.status)!=='待审核' || loading || printing || exporting || batchBusy} title={String(row.status)!=='待审核'?'先提交，进入待审核后才可审核':undefined} onClick={()=>batchTransition('approve',[row],true)}>审核</button>}
               <button className={styles.textButton} disabled={loading || printing || exporting || batchBusy} onClick={()=>void printSelectedDocuments([row])}>打印</button>
               <button className={styles.textButton} disabled={loading || printing || exporting || batchBusy} onClick={()=>void exportDocuments([row])}>导出</button>
@@ -278,7 +276,7 @@ export function ManagementWorkspace({ config }: { config: ManagementPage }) {
               {row.recordType === 'WAREHOUSE_STOCKTAKE' && canBatchWrite && row.status === '已审核' && row.docReviewStatus !== 'REVIEWED' && <><button className={styles.textButton} disabled={loading||batchBusy} onClick={()=>batchTransition('final-review',[row],true)}>复盘审核</button><span aria-hidden="true">｜</span></>}
               {row.recordType === 'WAREHOUSE_STOCKTAKE' && canBatchWrite && ['草稿','盘点中','待提交'].includes(String(row.status)) && <><button className={styles.textButton} disabled={loading || printing || exporting || batchBusy} onClick={() => batchTransition('submit', [row], true)}>提交</button><span aria-hidden="true">｜</span></>}
               {row.recordType === 'WAREHOUSE_STOCKTAKE' && canBatchWrite && ['草稿','盘点中','待提交','待审核'].includes(String(row.status)) && <><button className={styles.textButton} disabled={String(row.status) !== '待审核' || loading || printing || exporting || batchBusy} title={String(row.status) !== '待审核' ? '先提交，进入待审核后才可审核' : undefined} onClick={() => batchTransition('approve', [row], true)}>审核</button><span aria-hidden="true">｜</span></>}
-              <Link className={styles.textButton} href={String(row.id).startsWith('warehouse:') ? `/v2/supply-chain/stocktake/count/${String(row.id).slice(10)}?source=warehouse` : `/v2/supply-chain/stocktake/count/${row.id}`}>复盘差异</Link>
+              <Link className={styles.textButton} href={`/v2/supply-chain/stocktake/count/${encodeURIComponent(stocktakeId(row))}`}>复盘差异</Link>
               <span aria-hidden="true">｜</span><span title="本轮不实施盘点反审核"><button className={styles.textButton} disabled>反审核</button></span>
               <span aria-hidden="true">｜</span><button className={styles.textButton} disabled={loading || printing || exporting || batchBusy} onClick={() => void printSelectedDocuments([row])}>打印</button>
               <span aria-hidden="true">｜</span><button className={styles.textButton} disabled={loading || printing || exporting || batchBusy} onClick={() => void exportDocuments([row])}>导出</button>

@@ -5,7 +5,7 @@
 
 export const STATUS_LABEL: Record<string, { label: string; cls: string }> = {
   CLARIFYING: { label: '沟通中', cls: 'bg-bg text-blue' },
-  AWAITING_APPROVAL: { label: '待管理员审批', cls: 'bg-amber/15 text-amber-fg' },
+  AWAITING_APPROVAL: { label: '已记录', cls: 'bg-bg text-gray3' },
   APPROVED: { label: '已批准', cls: 'bg-green-bg text-green-fg' },
   IN_DEV: { label: '已立项开发', cls: 'bg-green-bg text-green-fg' },
   REJECTED: { label: '已驳回', cls: 'bg-red-bg text-red-fg' },

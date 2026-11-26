@@ -18,7 +18,7 @@ describe('供应链账务 CSV 导出', () => {
     expect(csv).toContain('供应商,入库单,门店,到期日,状态,金额')
     expect(csv).toContain('"华南,""蔬菜"""')
     expect(csv).toContain('"门店\n一"')
-    expect(csv).toContain('2026-09-28,OVERDUE,12.5')
+    expect(csv).toContain('2026-09-28,已逾期,12.50')
   })
 
   it('分别生成对账单与发票列', () => {
@@ -32,9 +32,9 @@ describe('供应链账务 CSV 导出', () => {
     }])
 
     expect(reconciliation).toContain('对账单号,供应商,供应商编号,期间开始,期间结束,状态,金额')
-    expect(reconciliation).toContain('REC-1,供应商甲,SUP-1,2026-09-01,2026-09-30,CONFIRMED,88')
+    expect(reconciliation).toContain('REC-1,供应商甲,SUP-1,2026-09-01,2026-09-30,已确认,88.00')
     expect(invoice).toContain('发票号码,供应商,开票日,关联入库数,状态,金额')
-    expect(invoice).toContain('INV-1,供应商乙,2026-09-28,2,VERIFIED,66')
+    expect(invoice).toContain('INV-1,供应商乙,2026-09-28,2,已核验,66.00')
   })
 
   it('阻止用户可控文本在 Excel 中被当作公式执行', () => {
@@ -48,8 +48,18 @@ describe('供应链账务 CSV 导出', () => {
   })
 
   it('文件名包含 tab 与时间戳', () => {
-    expect(billingCsvFilename('invoice', new Date(2026, 8, 28, 14, 5, 9)))
+    expect(billingCsvFilename('invoice', new Date('2026-09-28T06:05:09Z')))
       .toBe('供应链账务-发票-20260928-140509.csv')
+  })
+
+  it('跨午夜的时间戳按北京日期导出，纯日期期间保持原日期', () => {
+    const schedule = buildBillingCsv('schedule', [{ amount: 10, status: 'PENDING', dueAt: '2026-09-28T17:05:00Z' }])
+    const invoice = buildBillingCsv('invoice', [{ invoiceNo: 'FP02', amount: 10, status: 'PENDING', issueDate: '2026-09-28T17:05:00Z' }])
+    const period = buildBillingCsv('reconciliation', [{ no: 'D02', totalAmount: 10, status: 'DRAFT', periodStart: '2026-09-01', periodEnd: '2026-09-30' }])
+    expect(schedule).toContain('2026-09-29,待付款,10.00')
+    expect(invoice).toContain('2026-09-29,0,待核验,10.00')
+    expect(period).toContain('2026-09-01,2026-09-30')
+    expect(billingCsvFilename('schedule', new Date('2026-12-31T16:00:01Z'))).toBe('供应链账务-账期-20270101-000001.csv')
   })
 
   it('点击下载后延迟回收 Blob URL，兼容 Safari 与 WebView', () => {

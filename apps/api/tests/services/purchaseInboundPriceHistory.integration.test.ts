@@ -20,6 +20,7 @@ async function cleanup(tenant: string) {
   await prisma.upstreamReceipt.deleteMany({ where: { tenantId: tenant } })
   await prisma.upstreamPurchaseOrderLine.deleteMany({ where: { tenantId: tenant } })
   await prisma.upstreamPurchaseOrder.deleteMany({ where: { tenantId: tenant } })
+  await prisma.warehouseLedgerBalance.deleteMany({ where: { tenantId: tenant } })
   await prisma.product.deleteMany({ where: { tenantId: tenant } })
   await prisma.user.deleteMany({ where: { tenantId: tenant } })
   await prisma.supplier.deleteMany({ where: { tenantId: tenant } })
@@ -52,6 +53,7 @@ describe('purchase inbound price history (integration)', () => {
       prisma.product.create({ data: { tenantId, code: `PRICE-${suffix}`, name: '价格记忆商品', unit: '箱', purchaseUnit: '箱', inventoryUnit: '箱', orderUnit: '箱', costUnit: '箱', inventoryUnitsPerPurchaseUnit: 1, inventoryUnitsPerOrderUnit: 1, inventoryUnitsPerCostUnit: 1, unitConversionStatus: 'VERIFIED', price: 1 } }),
     ])
     warehouseId = warehouse.id; supplierId = supplier.id; otherSupplierId = otherSupplier.id; userId = user.id; productId = product.id
+    await prisma.warehouseLedgerBalance.create({ data: { tenantId, warehouseId, productId, inventoryUnit: "箱", physicalQty: 0, inventoryValue: 0 } })
   })
 
   afterAll(async () => { await cleanup(otherTenantId); await cleanup(tenantId); await prisma.$disconnect() })

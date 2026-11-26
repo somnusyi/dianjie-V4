@@ -97,8 +97,8 @@ export default function FinancePCLoginPage() {
           </div>
         </div>
         <div className="space-y-3 text-micro opacity-50 font-num">
-          <div>合肥瑶海店 · dianjie tenant</div>
-          <div>© 滇界云管 v4 · {new Date().getFullYear()}</div>
+          <div>滇界云管 · 财务工作台</div>
+          <div>© 滇界云管 · {new Date().getFullYear()}</div>
         </div>
       </aside>
 

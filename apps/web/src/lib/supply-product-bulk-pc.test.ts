@@ -8,6 +8,7 @@ import {
   buildSupplyProductExportSearch,
   bulkCategoryBlockedReason,
   canBulkCategory,
+  selectedSupplierForBulkCategory,
   clearRowSelection,
   clearSelectionAfterSuccess,
   formatBatchStatusPreviewSummary,
@@ -77,12 +78,12 @@ describe('export search params', () => {
 
   it('builds export path without query when no filters', () => {
     expect(buildSupplyProductExportPath({ q: '', category: '', status: '', supplierId: '' }))
-      .toBe('/api/products/export.csv')
+      .toBe('/api/products/export.csv?scope=supply-chain')
   })
 
   it('builds export path with query when filters active', () => {
     const path = buildSupplyProductExportPath({ q: '白菜', category: '', status: 'ENABLED', supplierId: '' })
-    expect(path).toBe('/api/products/export.csv?q=%E7%99%BD%E8%8F%9C&status=ENABLED')
+    expect(path).toBe('/api/products/export.csv?scope=supply-chain&q=%E7%99%BD%E8%8F%9C&status=ENABLED')
   })
 
   it('does not include page or pageSize in export search', () => {
@@ -198,5 +199,18 @@ describe('batch success notice', () => {
   it('states restore batch takes effect directly', () => {
     expect(buildBatchSuccessNotice('restore', 5)).toContain('批量恢复供应已完成 5 项')
     expect(buildBatchSuccessNotice('restore', 5)).toContain('直接生效并通知总厨')
+  })
+})
+
+describe('selected fulfiller category scope', () => {
+  const rows = [{ id: 'a', supplier: { id: 'one' } }, { id: 'b', supplier: { id: 'one' } }, { id: 'c', supplier: { id: 'two' } }, { id: 'missing' }]
+  it('enables a verified same-fulfiller selection without the removed supplier filter', () => {
+    expect(selectedSupplierForBulkCategory({ supplierId: '' }, rows, new Set(['a', 'b']))).toBe('one')
+  })
+  it('refuses mixed, missing, or off-page unverified ownership', () => {
+    for (const ids of [[], ['a', 'c'], ['missing'], ['a', 'unloaded']]) expect(selectedSupplierForBulkCategory({ supplierId: '' }, rows, new Set(ids))).toBe('')
+  })
+  it('preserves an explicit existing supplier filter for cross-page selections', () => {
+    expect(selectedSupplierForBulkCategory({ supplierId: 'one' }, [], new Set(['unloaded']))).toBe('one')
   })
 })

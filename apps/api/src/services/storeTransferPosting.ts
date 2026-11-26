@@ -65,6 +65,7 @@ export async function postStoreTransfer(tx: any, args: { tenantId: string; trans
     return row
   }
   if (action === 'SHIP' ? row.status !== 'PENDING' : !['SHIPPED', 'PARTIALLY_RECEIVED'].includes(row.status)) fail('调拨状态已变化，请刷新后重试', 409)
+  if (action === 'SHIP' && !row.approvedAt) fail('调拨单尚未通过供应链审核', 409)
   if (action !== 'SHIP' && !await tx.storeTransferMovement.findFirst({ where: { tenantId, transferId, kind: 'SHIP' } })) fail('历史调拨尚无库存过账依据，请先核定')
   const quantities = action === 'SHIP' ? row.items.map((i: any) => ({ itemId: i.id, quantity: D(i.quantity) })) : (args.items ?? []).map(i => ({ itemId: i.itemId, quantity: D(i.quantity) }))
   if (!quantities.length || new Set(quantities.map((i: any) => i.itemId)).size !== quantities.length || quantities.some((i: any) => i.quantity.lte(0) || i.quantity.decimalPlaces() > 6)) fail('请填写有效且不重复的调拨商品数量', 400)

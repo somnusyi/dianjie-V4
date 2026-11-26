@@ -1,3 +1,4 @@
+import { supplyChainProductScope } from '../lib/supply-chain-product-scope'
 import {createReviewInbound,createReviewOutbound} from '../services/warehouseReviewPosting'
 import { FastifyPluginAsync } from 'fastify'
 import { Prisma, prisma } from '@dianjie/db'
@@ -59,17 +60,33 @@ export function buildWarehouseInventoryScopeWhere(input: {
   scope: WarehouseInventoryScope
 }): Prisma.ProductWhereInput {
   const common = { tenantId: input.tenantId, status: 'ENABLED' as const }
-  if (input.scope === 'bom-mapping') return { ...common, category: 'BOM待采购映射' }
+  if (input.scope === 'bom-mapping') {
+    return {
+      ...common,
+      category: 'BOM待采购映射',
+      ...supplyChainProductScope(input.tenantId, { includeBomMapping: true }),
+    }
+  }
   if (input.scope === 'unit-review') {
     return {
       ...common,
       unitConversionStatus: { not: 'VERIFIED' },
-      NOT: { category: 'BOM待采购映射' },
+      ...supplyChainProductScope(input.tenantId),
     }
   }
   return {
     ...common,
     warehouseLedgerBalances: { some: { tenantId: input.tenantId, warehouseId: input.warehouseId } },
+    OR: [
+      supplyChainProductScope(input.tenantId),
+      {
+        warehouseLedgerBalances: { some: {
+          tenantId: input.tenantId,
+          warehouseId: input.warehouseId,
+          OR: [{ physicalQty: { not: 0 } }, { reservedQty: { not: 0 } }, { inventoryValue: { not: 0 } }],
+        } },
+      },
+    ],
   }
 }
 
@@ -735,7 +752,7 @@ export const warehouseInventoryRoutes: FastifyPluginAsync = async app => {
     const products = await prisma.product.findMany({
       where: {
         tenantId: req.user.tenantId,
-        ...(parsed.data.productIds?{id:{in:parsed.data.productIds}}:{status:'ENABLED',unitConversionStatus:'VERIFIED',NOT:{category:'BOM待采购映射'}}),
+        ...(parsed.data.productIds?{id:{in:parsed.data.productIds}}:{status:'ENABLED',unitConversionStatus:'VERIFIED',...supplyChainProductScope(req.user.tenantId)}),
         ...(terms.length ? {
           AND: terms.map(term => ({ OR: [
             { code: { contains: term, mode: 'insensitive' } },

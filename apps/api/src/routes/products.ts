@@ -2,6 +2,7 @@ import { FastifyPluginAsync } from 'fastify'
 import { z } from 'zod'
 import { Prisma, prisma } from '@dianjie/db'
 import { cached, invalidatePattern } from '../lib/cache'
+import { supplyChainProductScope } from '../lib/supply-chain-product-scope'
 import { isStoreScoped, isSupplierRole } from '../lib/auth-scope'
 import { requireSupplierCapability, SupplierCapability } from '../lib/supplier-access'
 import {
@@ -138,6 +139,7 @@ export const productListFilterSchema = z.object({
     z.enum(['PENDING_APPROVAL', 'PENDING_DISABLE', 'ENABLED', 'DISABLED']).optional(),
   ),
   q: z.string().trim().max(80).optional(),
+  scope: z.enum(['supply-chain']).optional(),
 }).passthrough()
 
 const productPatchSchema = z.object({
@@ -287,7 +289,8 @@ export async function buildProductListWhere(req: any): Promise<{ where?: any; fi
   }
   const { category, categoryId, supplierId: requestedSupplierId, status, q } = parsedFilters.data as any
   const { tenantId, role, supplierId } = req.user
-  const where: any = { tenantId }
+  const supplyChainView = isInternalSupplyChainRole(role) || parsedFilters.data.scope === 'supply-chain'
+  const where: Prisma.ProductWhereInput = { tenantId, ...(supplyChainView ? supplyChainProductScope(tenantId) : {}) }
   if (status) where.status = status
   if (requestedSupplierId && !isSupplierRole(role) && !isStoreScoped(role)) {
     where.supplierId = requestedSupplierId
@@ -593,7 +596,8 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
     const stripPricingForSupplier = (rows: any[]) => isSupplierRole(role)
       ? rows.map(row => { const { pricingMode, markupPercent, ...rest } = row; return rest })
       : rows
-    if (!page && !q) {
+    const supplyChainView = isInternalSupplyChainRole(role) || filters.scope === 'supply-chain'
+    if (!page && !q && !supplyChainView) {
       const scopeKey = productCatalogCacheScope(role, supplierId)
       const effectiveStatus = typeof where.status === 'string' ? where.status : 'all'
       const rows = await cached(`products:full:${tenantId}:${scopeKey}:${category || 'all'}:${effectiveStatus}`, 600, () =>
@@ -687,7 +691,8 @@ export const productRoutes: FastifyPluginAsync = async (app) => {
   /** 当前租户/供应商实际使用的分类主数据，供筛选和下拉选择。 */
   app.get('/categories', auth(app), async (req: any, reply: any) => {
     const { tenantId, role, supplierId } = req.user
-    const where: any = { tenantId }
+    const supplyChainView = isInternalSupplyChainRole(role) || req.query?.scope === 'supply-chain'
+    const where: Prisma.ProductWhereInput = { tenantId, ...(supplyChainView ? supplyChainProductScope(tenantId) : {}) }
     let categorySupplierId: string | null = null
     if (isSupplierRole(role)) {
       const scopedSupplierId = supplierScopeOrReply(req, reply, 'catalog.read')

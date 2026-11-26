@@ -29,11 +29,10 @@ const NAV: any[] = [
   { type: 'item', key: 'stores',    label: '门店管理', desc: '门店档案', icon: '店', path: '/stores',    roles: ['ADMIN','SUPER_ADMIN'] },
   { type: 'item', key: 'users',     label: '用户管理', desc: '账号 / 权限', icon: '人', path: '/users',     roles: ['ADMIN','SUPER_ADMIN'] },
   { type: 'item', key: 'logs',      label: '操作日志', desc: '审计留痕', icon: '记', path: '/logs',      roles: ['ADMIN','SUPER_ADMIN'] },
-  { type: 'item', key: 'feedback-admin', label: '反馈管理', desc: '分诊审批 / 闭环', icon: '理', path: '/feedback/admin', roles: ['SUPER_ADMIN'] },
 ]
 
 const SUPPLIER_KEYS = ['orders', 'loss-claims', 'feedback']
-const MANAGER_HIDDEN = ['suppliers', 'products', 'stores', 'logs', 'finance', 'approval', 'feedback-admin']
+const MANAGER_HIDDEN = ['suppliers', 'products', 'stores', 'logs', 'finance', 'approval']
 const ROLE_LABEL: Record<string, string> = {
   ADMIN: '老板 / 管理员',
   FINANCE: '财务',

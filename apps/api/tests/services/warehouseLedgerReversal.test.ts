@@ -21,6 +21,7 @@ function originalMovement(overrides: Record<string, unknown> = {}) {
     sourceType: 'DeliveryOrder',
     sourceId: 'do-1',
     physicalDelta: new Prisma.Decimal(-1000),
+    valueDelta: new Prisma.Decimal(-2500),
     inventoryQuantity: new Prisma.Decimal(1000),
     originalQuantity: new Prisma.Decimal(100),
     originalUnit: '箱',

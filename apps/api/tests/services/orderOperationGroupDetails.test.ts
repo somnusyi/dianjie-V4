@@ -130,7 +130,7 @@ describe('operation group delivery summaries API', () => {
           {
             id: 'delivery-early', no: 'D-EARLY', status: 'SHIPPED', rowVersion: 2, receipt: null,
             createdAt: new Date('2026-09-03T01:20:00.000Z'), shippedAt: new Date('2026-09-03T02:00:00.000Z'), actualTotalAmount: '4',
-            items: [{ id: 'di-1', purchaseOrderItemId: 'poi-1', productId: 'p1', shippedQty: '2', unitPriceSnapshot: '2', amount: '4', productNameSnapshot: '冻白菜', productUnitSnapshot: '斤', product: { name: '新白菜', unit: '箱' } }],
+            items: [{ id: 'di-1', purchaseOrderItemId: 'poi-1', productId: 'p1', shippedQty: '2', unitPriceSnapshot: '2', amount: '4', productNameSnapshot: '冻白菜', productCategorySnapshot: '蔬菜类', productUnitSnapshot: '斤', product: { name: '新白菜', category: '已变更分类', location: '冷藏-002', unit: '箱' } }],
           },
           { no: 'D-CANCEL', status: 'CANCELLED', createdAt: occurredAt, actualTotalAmount: '99', items: [] },
         ],
@@ -151,7 +151,7 @@ describe('operation group delivery summaries API', () => {
       deliverySummaries: [
         {
           id: 'delivery-early', no: 'D-EARLY', status: 'SHIPPED', rowVersion: 2, hasReceipt: false,
-          items: [{ name: '冻白菜', unit: '斤', quantity: '2' }],
+          items: [{ name: '冻白菜', category: '蔬菜类', location: '冷藏-002', unit: '斤', quantity: '2' }],
         },
         {
           id: 'delivery-late', no: 'D-LATE', status: 'DELIVERED', rowVersion: 4, hasReceipt: true,
@@ -172,7 +172,7 @@ describe('operation group delivery summaries API', () => {
     expect(detail?.totals.costAmount).toBeNull()
     expect(detail?.totals.amount).toBe('17.00')
     expect(detail?.mergedItems).toEqual(expect.arrayContaining([
-      expect.objectContaining({ productId: 'p1', costAmount: '2.50' }),
+      expect.objectContaining({ productId: 'p1', category: '蔬菜类', location: '冷藏-002', costAmount: '2.50' }),
       expect.objectContaining({ productId: 'p2', costAmount: '3.50' }),
       expect.objectContaining({ productId: 'p3', amount: '7.00', costAmount: null }),
     ]))

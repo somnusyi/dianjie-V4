@@ -1,5 +1,6 @@
 import { FastifyInstance } from 'fastify'
 import OSS from 'ali-oss'
+import { LocalTestObjectStorage, localTestStorageEnabled, readSignedLocalTestObject, resignLocalTestObjectUrl } from '../lib/local-test-object-storage'
 import { z } from 'zod'
 import {upstreamFeatureEnabled} from '../lib/upstream-feature-flags'
 
@@ -65,6 +66,7 @@ const signedUrlQuerySchema = z.object({
 }).strict()
 
 function ossClient() {
+  if (localTestStorageEnabled()) return new LocalTestObjectStorage()
   return new OSS({
     region: process.env.OSS_REGION || 'oss-cn-hangzhou',
     accessKeyId: process.env.OSS_ACCESS_KEY_ID!,
@@ -78,6 +80,7 @@ function ossClient() {
 
 /** 把已签名 URL 的 scheme 强制成 https (防御历史 http 残留 / SDK 兜底) */
 function toHttps(url: string): string {
+  if (localTestStorageEnabled()) return url
   return typeof url === 'string' ? url.replace(/^http:\/\//i, 'https://') : url
 }
 
@@ -87,6 +90,8 @@ function toHttps(url: string): string {
  */
 export function resignOssUrl(url: string | null | undefined): string {
   if (!url || typeof url !== 'string') return url as any
+  const local = resignLocalTestObjectUrl(url)
+  if (local) return local
   try {
     const u = new URL(url)
     const bucket = process.env.OSS_BUCKET || 'dianjie-upload'
@@ -111,6 +116,8 @@ export function resignOssUrls(urls: any): string[] {
  */
 export function resignOssUrlForAI(url: string | null | undefined): string {
   if (!url || typeof url !== 'string') return url as any
+  const local = resignLocalTestObjectUrl(url)
+  if (local) return local
   try {
     const u = new URL(url)
     const bucket = process.env.OSS_BUCKET || 'dianjie-upload'
@@ -312,6 +319,16 @@ async function uploadOne(req: any, reply: any, opts: { allowedMimes: string[]; c
 }
 
 export async function uploadRoutes(app: FastifyInstance) {
+  if (localTestStorageEnabled()) {
+    app.get('/local-test-objects', async (req, reply) => {
+      try {
+        const object = await readSignedLocalTestObject(req.query)
+        return reply.header('Cache-Control', 'private, max-age=300').type(object.mime).send(object.bytes)
+      } catch (error: any) {
+        return reply.code(error.statusCode || (error.status === 404 ? 404 : 503)).send({error: '附件不存在、链接已失效或暂时无法读取'})
+      }
+    })
+  }
   // Keep multipart uploads in the existing upload plugin scope. Upstream business
   // routes are registered before the root multipart parser becomes available.
   app.post('/upstream/quality-batches/:id/images',{preHandler:[(app as any).authenticate]},async(req:any,reply:any)=>{

@@ -4,7 +4,8 @@ import { Prisma, prisma } from '@dianjie/db'
 import { z } from 'zod'
 import dayjs from 'dayjs'
 import { isStoreScoped, resolveActiveStore } from '../lib/auth-scope'
-import { hasInternalSupplyChainCapability } from '../lib/internal-supply-chain-access'
+import { hasInternalSupplyChainCapability, isInternalSupplyChainRole } from '../lib/internal-supply-chain-access'
+import { supplyChainProductScope } from '../lib/supply-chain-product-scope'
 import { buildIdempotencyKey } from '../lib/idempotency'
 import { calendarDateSchema } from '../lib/calendar-date'
 import { estimatedStoreInventory, latestStoreInventorySnapshot } from '../services/storeInventory'
@@ -88,8 +89,15 @@ export const inventoryRoutes: FastifyPluginAsync = async app => {
     if (!canViewInventory(req.user.role)) return reply.status(403).send({ error: '无权查看门店库存' })
     try {
       const storeId = await resolveInventoryStore(req.user, req.query?.storeId)
-      const estimate = await estimatedStoreInventory(req.user.tenantId, storeId)
-      return estimate.items
+      const { tenantId, role } = req.user
+      const estimate = await estimatedStoreInventory(tenantId, storeId)
+      if (!isInternalSupplyChainRole(role) || !estimate.items.length) return estimate.items
+      const products = await prisma.product.findMany({
+        where: { tenantId, id: { in: estimate.items.map(item => item.id) }, ...supplyChainProductScope(tenantId) },
+        select: { id: true },
+      })
+      const productIds = new Set(products.map(product => product.id))
+      return estimate.items.filter(item => productIds.has(item.id))
     } catch (error: any) {
       return reply.status(error.statusCode || 400).send({ error: error.message })
     }
@@ -279,6 +287,7 @@ export const inventoryRoutes: FastifyPluginAsync = async app => {
       tenantId,
       voidedAt: null,
       ...(storeId ? { storeId } : {}),
+      ...(isInternalSupplyChainRole(role) ? { product: supplyChainProductScope(tenantId) } : {}),
     }
 
     if (paginated) {

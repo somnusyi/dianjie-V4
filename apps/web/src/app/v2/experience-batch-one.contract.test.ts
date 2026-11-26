@@ -39,7 +39,7 @@ describe('2026-09-28 操作体验速修', () => {
     expect(transfers).toContain('可新建、发货、收货、撤回')
     expect(transfers).toContain('+新建调拨单')
     expect(transfers).toContain("requestStatusChange(row, 'SHIPPED')")
-    expect(transfers).toContain("requestStatusChange(row, 'RECEIVED')")
+    expect(transfers).toContain("openProcessing(row,'RECEIVE')")
     expect(transfers).toContain("requestStatusChange(row, 'REVOKED')")
   })
 

@@ -110,7 +110,7 @@ describe('replenishment route access and tenant scope', () => {
 
   it('turns a concurrent unique/serialization loser into the committed acceptance replay', async () => {
     vi.spyOn(prisma, '$transaction').mockRejectedValue({ code: 'P2002' })
-    vi.spyOn(prisma.replenishmentOrderEvent, 'findFirst').mockResolvedValue({ replenishmentOrderId: 'replenishment-1' } as any)
+    vi.spyOn(prisma.replenishmentOrderEvent, 'findFirst').mockResolvedValue({ replenishmentOrderId: 'replenishment-1', eventType: 'ACCEPTED' } as any)
     vi.spyOn(prisma.replenishmentFulfillmentLink, 'findUnique').mockResolvedValue({
       replenishmentOrderId: 'replenishment-1',
       purchaseOrder: { id: 'purchase-order-1', no: 'PO202609000001' },

@@ -114,7 +114,7 @@ describe('single confirmed-order shipment draft semantics', () => {
     expect(source).toContain("order.status === 'CONFIRMED'")
     expect(source).toContain("order.status === 'DELIVERING'")
     expect(source).toContain('请先保存商品明细后再确认发货')
-    expect(source).toContain('<button onClick={ship} disabled={submitting || detailsDirty}')
+    expect(source).toContain('<button onClick={ship} disabled={submitting || detailsDirty || (order.supplier.sourceType === \'HEADQ_WAREHOUSE\' && !pickerName.trim())}')
     expect(source).toContain("确认发货 (出发)")
   })
 

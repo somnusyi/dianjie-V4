@@ -59,7 +59,7 @@ function buildApp() {
 
 const warehouseProduct = {
   id: 'product-1', supplierId: 'supplier-headq', stock: 999,
-  imageKey: null, supplier: { id: 'supplier-headq', name: '总仓', sourceType: 'HEADQ_WAREHOUSE' },
+  unit: '箱', inventoryUnit: '袋', imageKey: null, supplier: { id: 'supplier-headq', name: '总仓', sourceType: 'HEADQ_WAREHOUSE' },
 }
 
 describe('store catalog production boundaries', () => {
@@ -116,7 +116,7 @@ describe('store catalog production boundaries', () => {
     })).toEqual({ physicalStock: 0, reservedStock: 0, availableStock: 0 })
   })
 
-  it('keeps the legacy supplier-stock projection while the warehouse ledger is off', () => {
+  it('keeps the legacy stock-unit projection for external suppliers', () => {
     expect(projectCatalogAvailability({
       product: { stock: 12 },
       supplierReserved: 2,
@@ -127,8 +127,8 @@ describe('store catalog production boundaries', () => {
 
   it.each([
     {
-      label: 'SHADOW reminder-only', inventoryMode: 'SHADOW', blockZeroStockAtOrderEntry: false,
-      expected: { inventoryTracked: true, inventoryEnforced: false, availableStock: 0 },
+      label: 'SHADOW with submission reservation', inventoryMode: 'SHADOW', blockZeroStockAtOrderEntry: false,
+      expected: { inventoryTracked: true, inventoryEnforced: true, availableStock: 0, availabilityUnit: '袋' },
     },
     {
       label: 'STRICT blocking', inventoryMode: 'STRICT', blockZeroStockAtOrderEntry: true,
@@ -136,9 +136,9 @@ describe('store catalog production boundaries', () => {
     },
     {
       label: 'OFF', inventoryMode: 'OFF', blockZeroStockAtOrderEntry: false,
-      expected: { inventoryTracked: false, inventoryEnforced: false, availableStock: 999 },
+      expected: { inventoryTracked: true, inventoryEnforced: true, availableStock: 0, availabilityUnit: '袋' },
     },
-  ])('separates tracked and enforced catalog signals for $label', async ({
+  ])('reflects mandatory HEADQ submission stock for $label', async ({
     inventoryMode, blockZeroStockAtOrderEntry, expected,
   }) => {
     mocks.warehouseFindFirst.mockResolvedValue({ inventoryMode, blockZeroStockAtOrderEntry })
@@ -154,7 +154,17 @@ describe('store catalog production boundaries', () => {
     await app.close()
   })
 
-  it('never projects an external STRICT supplier as order-entry enforced', async () => {
+  it('uses available ledger bags even in OFF mode instead of legacy box stock', async () => {
+    mocks.warehouseFindFirst.mockResolvedValue({inventoryMode:'OFF',blockZeroStockAtOrderEntry:false})
+    mocks.balanceFindMany.mockResolvedValue([{productId:'product-1',physicalQty:20,reservedQty:3}])
+    const app=buildApp()
+    const response=await app.inject({method:'GET',url:'/'})
+    expect(response.statusCode).toBe(200)
+    expect(response.json()[0]).toMatchObject({availableStock:17,availabilityUnit:'袋',inventoryEnforced:true})
+    await app.close()
+  })
+
+  it.each(['STRICT','NOT_TRACKED'] as const)('keeps external %s submission policy and its legacy stock unit', async (mode) => {
     mocks.productFindMany.mockResolvedValue([{
       ...warehouseProduct,
       supplierId: 'supplier-external',
@@ -162,7 +172,7 @@ describe('store catalog production boundaries', () => {
       supplier: { id: 'supplier-external', name: '外部供应商', sourceType: null },
     }])
     mocks.supplierFindMany.mockResolvedValue([{
-      id: 'supplier-external', sourceType: null, inventoryMode: 'STRICT',
+      id: 'supplier-external', sourceType: null, inventoryMode: mode,
     }])
     mocks.getSupplierReservedStock.mockResolvedValue(new Map([['product-1', 0]]))
     const app = buildApp()
@@ -171,8 +181,9 @@ describe('store catalog production boundaries', () => {
     expect(response.statusCode).toBe(200)
     expect(response.json()[0]).toMatchObject({
       availableStock: 0,
-      inventoryTracked: true,
-      inventoryEnforced: false,
+      inventoryTracked: mode === 'STRICT',
+      inventoryEnforced: mode === 'STRICT',
+      availabilityUnit: '箱',
     })
     expect(mocks.getSupplierReservedStock).toHaveBeenCalledWith({
       tenantId: 'tenant-1', productIds: ['product-1'],

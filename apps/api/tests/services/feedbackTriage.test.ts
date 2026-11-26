@@ -66,23 +66,23 @@ describe('parseTriageBlock: triage 标记解析', () => {
 })
 
 describe('decideTriageAction: 分诊路由决策', () => {
-  it('BUG_BLOCKING → AWAITING_APPROVAL + 紧急企微审批', () => {
+  it('BUG_BLOCKING → 保留反馈并提醒人工处理', () => {
     const action = decideTriageAction({ category: 'BUG_BLOCKING', sufficient: true })
-    expect(action.status).toBe('AWAITING_APPROVAL')
+    expect(action.status).toBe('CLARIFYING')
     expect(action.notifyEvent).toBe('FEEDBACK_URGENT_BUG')
     expect(action.systemNote).toBeTruthy()
   })
 
-  it('IMPROVEMENT → AWAITING_APPROVAL + 审批卡片', () => {
+  it('IMPROVEMENT → 仅保留反馈记录', () => {
     const action = decideTriageAction({ category: 'IMPROVEMENT', sufficient: true })
-    expect(action.status).toBe('AWAITING_APPROVAL')
-    expect(action.notifyEvent).toBe('FEEDBACK_APPROVAL_PENDING')
+    expect(action.status).toBe('CLARIFYING')
+    expect(action.notifyEvent).toBeNull()
   })
 
-  it('NEW_FEATURE → AWAITING_APPROVAL + 审批卡片 (同一事件, payload 区分)', () => {
+  it('NEW_FEATURE → 仅保留反馈记录', () => {
     const action = decideTriageAction({ category: 'NEW_FEATURE', sufficient: true })
-    expect(action.status).toBe('AWAITING_APPROVAL')
-    expect(action.notifyEvent).toBe('FEEDBACK_APPROVAL_PENDING')
+    expect(action.status).toBe('CLARIFYING')
+    expect(action.notifyEvent).toBeNull()
   })
 
   it('QUESTION → CLOSED 闭环, 不发通知', () => {
@@ -105,12 +105,12 @@ describe('notify events: 反馈系统事件定义', () => {
     })
   })
 
-  it('审批卡片指向 /v2/boss/feedback/[id] 且区分改进/新需求文案', () => {
+  it('历史反馈提醒转向仍可打开的反馈详情', () => {
     const improvement = renderTemplate('FEEDBACK_APPROVAL_PENDING', {
       feedbackId: 'fb1', category: 'IMPROVEMENT', title: '图片放大', summary: '验收图看不清', reporterName: '张三',
     })
     expect(improvement.kind).toBe('textcard')
-    expect(improvement.textcard!.url).toBe('https://www.njdianjie.com/v2/boss/feedback/fb1')
+    expect(improvement.textcard!.url).toBe('https://www.njdianjie.com/v2/feedback/fb1')
     expect(improvement.textcard!.title).toContain('体验改进')
     expect(improvement.textcard!.description).toContain('张三')
 
@@ -120,13 +120,13 @@ describe('notify events: 反馈系统事件定义', () => {
     expect(feature.textcard!.title).toContain('新需求')
   })
 
-  it('紧急 bug 卡片带 🚨 且指向审批详情页', () => {
+  it('紧急 bug 卡片带 🚨 且指向反馈详情页', () => {
     const msg = renderTemplate('FEEDBACK_URGENT_BUG', {
       feedbackId: 'fb3', title: '无法下单', summary: '提交按钮点了没反应', reporterName: '李四', storeName: '瑶海店',
     })
     expect(msg.textcard!.title).toContain('🚨')
     expect(msg.textcard!.description).toContain('瑶海店')
-    expect(msg.textcard!.url).toContain('/v2/boss/feedback/fb3')
+    expect(msg.textcard!.url).toContain('/v2/feedback/fb3')
   })
 
   it('AI 修复方案只通知 SUPER_ADMIN 并指向专用审批页', () => {

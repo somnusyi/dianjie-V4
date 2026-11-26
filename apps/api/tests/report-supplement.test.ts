@@ -33,7 +33,7 @@ describe('new report metrics', () => {
     const tx = {
       warehouseLedgerMovement: {
         findMany: async ({ where }: any) => {
-          capturedWhere = where
+          capturedWhere ??= where
           return [{
             id: 'loss-movement', productId: 'product-1', warehouseId: 'warehouse-1', inventoryUnit: 'kg',
             type: 'ORDER_OUTBOUND', sourceType: 'WarehouseSelfLoss', physicalDelta: d(-2), valueDelta: d(-6),
@@ -47,7 +47,7 @@ describe('new report metrics', () => {
     const q = { start: '2026-09-01', end: '2026-09-30', type: '', warehouseId: '', keyword: '', category: '' } as any
     const rows = await loadInventorySupplement(tx, 'tenant-1', 'other-summary', q, { tenantId: 'tenant-1', product: { tenantId: 'tenant-1' } })
     expect(capturedWhere.OR[0].sourceType.in).toContain('WarehouseSelfLoss')
-    expect(rows).toEqual([expect.objectContaining({ type: '出库', reason: '总仓自损：过期变质', quantity: -2, amount: -6 })])
+    expect(rows).toEqual([expect.objectContaining({ type: '出库', reason: '总仓自损：过期变质', quantity: -2, amount: null, costStatus: 'PENDING_COST' })])
   })
   it('旧45天配置及查询覆盖均不能改变29/30/31天、首次入库和未知历史的提醒', async () => {
     const now = new Date()

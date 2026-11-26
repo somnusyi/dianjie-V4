@@ -243,7 +243,7 @@ export default function InternalSupplyChainHomePage() {
           <QuickEntry href="/v2/supply-chain/stores" icon="店" label="门店运营" desc="订货、收货、消耗" tone="green" />
           <QuickEntry href="/v2/supply-chain/inventory" icon="仓" label="库存管理与验收" desc="库存、自损、入库与审核" tone="default" />
           <QuickEntry href="/v2/supply-chain/products" icon="品" label="商品管理" desc="SKU、分类、报价" tone="default" />
-          <QuickEntry href="/v2/supply-chain/procurement" icon="采" label="上游采购" desc="下单、验收、差异与月结" tone="default" />
+          <QuickEntry href="/v2/supply-chain/procurement" icon="采" label="上游采购" desc="下单、验收、退货与差异" tone="default" />
         </div>
       </Section>
 

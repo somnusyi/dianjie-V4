@@ -2,7 +2,6 @@ import { FastifyPluginAsync } from 'fastify'
 import { Prisma, prisma } from '@dianjie/db'
 import { z } from 'zod'
 import { isStoreScoped, resolveActiveStore } from '../lib/auth-scope'
-import { hasInternalSupplyChainCapability } from '../lib/internal-supply-chain-access'
 import { businessNoFloor, nextBusinessNo } from '../services/purchaseOrderIntegrity'
 import { estimatedStoreInventory } from '../services/storeInventory'
 import { revalueStoreConsumptionCosts } from '../services/inventoryCosting'
@@ -17,10 +16,7 @@ const EVIDENCE_RATE_THRESHOLD = new Prisma.Decimal('0.05')
 const EVIDENCE_AMOUNT_THRESHOLD = new Prisma.Decimal('200')
 
 function canViewInventoryCounts(role: string | undefined | null) {
-  return Boolean(role && (
-    VIEW_ROLES.has(role)
-    || hasInternalSupplyChainCapability(role, 'inventory.read')
-  ))
+  return Boolean(role && VIEW_ROLES.has(role))
 }
 
 const dateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, '日期格式应为 YYYY-MM-DD')

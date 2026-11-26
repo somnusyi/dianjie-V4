@@ -58,6 +58,17 @@ function renderShell(pathname: string) {
 describe('SupplyChainShell 移动端导航', () => {
   beforeEach(() => navigation.push.mockReset())
 
+  it('采购记录在上游采购下方独立显示并单独高亮', () => {
+    const { container, cleanup } = renderShell('/v2/supply-chain/procurement/orders')
+    const nav = container.querySelector('nav[aria-label="内部供应链主导航"]')!
+    const procurement = nav.querySelector('a[href="/v2/supply-chain/procurement"]')!
+    const records = nav.querySelector('a[href="/v2/supply-chain/procurement/orders"]')!
+    expect(procurement.nextElementSibling).toBe(records)
+    expect(procurement.getAttribute('aria-current')).toBeNull()
+    expect(records.getAttribute('aria-current')).toBe('page')
+    cleanup()
+  })
+
   it.each([
     ['/v2/supply-chain/home', 'home'],
     ['/v2/supply-chain/fulfillment/order-1', 'orders'],

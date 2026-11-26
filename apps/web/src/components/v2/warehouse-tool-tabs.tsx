@@ -6,19 +6,17 @@ import { usePathname } from 'next/navigation'
 const TABS = [
   { href: '/v2/supply-chain/inventory', label: '库存查询' },
   { href: '/v2/supply-chain/inventory/loss', label: '总仓自损' },
-  { href: '/v2/supply-chain/inbound', label: '入库记录' },
-  { href: '/v2/supply-chain/docs', label: '单据审核' },
 ] as const
 
 export function WarehouseToolTabs() {
   const pathname = usePathname() || ''
   return (
-    <nav aria-label="库存与单据视图" className="mb-4 flex min-h-11 items-center gap-2 overflow-x-auto border-b border-border pb-3">
+    <nav aria-label="库存与单据视图" className="mb-4 flex items-center gap-5 border-b border-border">
       {TABS.map(tab => {
         const selected = pathname === tab.href
           || (tab.href !== '/v2/supply-chain/inventory' && pathname.startsWith(`${tab.href}/`))
         return <Link key={tab.href} href={tab.href} aria-current={selected ? 'page' : undefined}
-          className={`shrink-0 rounded-cta px-4 py-2 text-button ${selected ? 'bg-ink text-white' : 'border border-border bg-white text-gray2'}`}
+          className={`shrink-0 border-b-2 px-1 py-2 text-button ${selected ? 'border-ink text-ink' : 'border-transparent text-gray2 hover:text-ink'}`}
         >{tab.label}</Link>
       })}
     </nav>

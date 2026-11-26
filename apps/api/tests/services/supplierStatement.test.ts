@@ -54,3 +54,16 @@ describe('supplier monthly statement projection', () => {
     expect(csv).toContain('ON_HOLD')
   })
 })
+
+it('keeps a negative calculated adjustment numeric in CSV', () => {
+  const data = row({ totalAmount: '90.12', paymentSchedule: { id: 'ps2', amount: '100.25', status: 'PENDING', dueAt: new Date('2026-08-01Z'), paidAt: null, bankTxNo: null } })
+  const statement = buildSupplierStatement([data])
+  expect(statement.lines[0].payableAdjustment).toBe(-10.13)
+  const adjustmentCell = supplierStatementToCsv(statement).split('\r\n')[1].split(',')[9]
+  expect(adjustmentCell).toBe('"-10.13"')
+  expect(Number(adjustmentCell.slice(1, -1))).toBe(-10.13)
+})
+it.each(['=SUM(1)', '+1+2', '-1+2', '@SUM(1)'])('continues neutralizing untrusted document text %s', name => {
+  const csv = supplierStatementToCsv(buildSupplierStatement([row({ store: { id: 's1', name } })]))
+  expect(csv).toContain(`"'${name}"`)
+})

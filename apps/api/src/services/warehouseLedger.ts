@@ -114,6 +114,7 @@ type LockedBalance = {
   reservedQty: Prisma.Decimal
   inventoryValue: Prisma.Decimal
   averageUnitCost: Prisma.Decimal
+  postingSequence: number
   rowVersion: number
 }
 
@@ -324,7 +325,7 @@ async function lockBalances(
   if (productIds.length === 0) return new Map<string, LockedBalance>()
   const rows = await tx.$queryRaw<LockedBalance[]>(Prisma.sql`
     SELECT "id", "productId", "inventoryUnit", "physicalQty", "reservedQty",
-           "inventoryValue", "averageUnitCost", "rowVersion"
+           "inventoryValue", "averageUnitCost", "postingSequence", "rowVersion"
     FROM "warehouse_ledger_balances"
     WHERE "tenantId" = ${input.tenantId}
       AND "warehouseId" = ${input.warehouseId}
@@ -1860,6 +1861,7 @@ export type WarehouseStocktakeDifferenceInput = {
   warehouseId: string
   stocktakeId: string
   stocktakeItemId: string
+  postingCycle: number
   userId: string
   productId: string
   productName: string
@@ -1887,10 +1889,12 @@ export async function postWarehouseStocktakeDifference(
   if (unitCost.lt(0) || (differenceQuantity.gt(0) && unitCost.lte(0))) {
     throw businessError('盘盈商品必须有大于0的单位成本', 400)
   }
-  const idempotencyKey = `warehouse-stocktake:${input.stocktakeItemId}`
+  if (!Number.isSafeInteger(input.postingCycle) || input.postingCycle <= 0) throw businessError('盘点过账轮次无效', 400)
+  const idempotencyKey = `warehouse-stocktake:${input.stocktakeId}:c${input.postingCycle}:${input.stocktakeItemId}`
   const requestFingerprint = fingerprint({
     stocktakeId: input.stocktakeId,
     stocktakeItemId: input.stocktakeItemId,
+    postingCycle: input.postingCycle,
     productId: input.productId,
     differenceQuantity: differenceQuantity.toFixed(QTY_DP),
     unitCost: unitCost.toFixed(COST_DP),
@@ -2000,6 +2004,257 @@ export async function postWarehouseStocktakeDifference(
     trigger: { type: 'WarehouseStocktake', id: movement.id },
   })
   return { replayed: false, movement }
+}
+
+export type WarehouseStocktakeReversalItem = {
+  stocktakeItemId: string
+  productId: string
+  productName: string
+  inventoryUnit: string
+  approvedPostingSequence: number
+  approvedBalanceVersion: number
+  originalMovementId?: string | null
+}
+
+/**
+ * Reverse one complete stocktake posting cycle without deleting or rewriting
+ * any original fact. The stocktake row is locked by the caller first; this
+ * helper then locks every affected balance in product order and proves that no
+ * movement, reservation change, or direct balance update happened afterwards.
+ */
+export async function reverseWarehouseStocktakeCycleInTransaction(
+  tx: Prisma.TransactionClient,
+  input: {
+    tenantId: string
+    warehouseId: string
+    stocktakeId: string
+    stocktakeNo: string
+    postingCycle: number
+    approvalSequence: bigint
+    userId: string
+    reason: string
+    items: WarehouseStocktakeReversalItem[]
+  },
+) {
+  const reason = String(input.reason || '').trim()
+  if (reason.length < 2 || reason.length > 500) throw businessError('反审核原因需为2至500个字符', 400)
+  if (!Number.isSafeInteger(input.postingCycle) || input.postingCycle <= 0) throw businessError('盘点过账轮次无效', 409)
+  const itemIds = input.items.map(item => item.stocktakeItemId)
+  const productIds = input.items.map(item => item.productId)
+  if (!itemIds.length || new Set(itemIds).size !== itemIds.length || new Set(productIds).size !== productIds.length) {
+    throw businessError('盘点反审核品项为空或重复', 409)
+  }
+
+  const balances = await lockBalances(tx, {
+    tenantId: input.tenantId,
+    warehouseId: input.warehouseId,
+    products: input.items.map(item => ({ productId: item.productId, inventoryUnit: item.inventoryUnit })),
+  })
+  for (const item of input.items) {
+    const balance = balances.get(item.productId)!
+    if (balance.postingSequence !== item.approvedPostingSequence || balance.rowVersion !== item.approvedBalanceVersion) {
+      throw businessError(`审核后「${item.productName}」已有库存业务、预占或余额变化，不能反审核`, 409)
+    }
+  }
+
+  // This check must run while all affected balances are locked. A concurrent
+  // zero-difference approval also locks the balances but does not increment
+  // their versions. If it was queued first, we wait for it to commit here and
+  // then observe its lifecycle sequence before writing any reversal. If this
+  // reversal owns the locks first, the later approval will instead fail its
+  // frozen balance-version validation after we commit.
+  const laterApprovedStocktake = await tx.warehouseStocktakeLifecycleEvent.findFirst({
+    where: {
+      tenantId: input.tenantId,
+      action: 'APPROVE',
+      sequence: { gt: input.approvalSequence },
+      stocktakeId: { not: input.stocktakeId },
+      stocktake: {
+        warehouseId: input.warehouseId,
+        status: 'CONFIRMED',
+        items: { some: { productId: { in: productIds } } },
+      },
+    },
+    select: { stocktake: { select: { no: true } } },
+    orderBy: { sequence: 'asc' },
+  })
+  if (laterApprovedStocktake) {
+    throw businessError(`后续盘点单 ${laterApprovedStocktake.stocktake.no} 已审核并冻结相同商品快照，不能反审核本单`, 409)
+  }
+
+  const movementIds = input.items.flatMap(item => item.originalMovementId ? [item.originalMovementId] : [])
+  const originals = movementIds.length ? await tx.warehouseLedgerMovement.findMany({
+    where: { tenantId: input.tenantId, warehouseId: input.warehouseId, id: { in: movementIds } },
+    include: {
+      reversal: true,
+      createdLot: true,
+      lotAllocations: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] },
+      netCostBasisConfirmations: { orderBy: { version: 'desc' }, take: 1 },
+    },
+  }) : []
+  if (originals.length !== movementIds.length) throw businessError('本轮盘点原台账流水不完整，不能反审核', 409)
+  const originalsById = new Map(originals.map(row => [row.id, row]))
+
+  const lotIds = [...new Set(originals.flatMap(row => row.lotAllocations.map(allocation => allocation.lotId))
+    .concat(originals.flatMap(row => row.createdLot ? [row.createdLot.id] : [])))].sort()
+  if (lotIds.length) {
+    await tx.$queryRaw(Prisma.sql`
+      SELECT "id" FROM "warehouse_ledger_lots"
+      WHERE "tenantId"=${input.tenantId} AND "id" IN (${Prisma.join(lotIds)})
+      ORDER BY "id" FOR UPDATE
+    `)
+  }
+
+  // Re-read after balance/lot locks. Inventory mutations use the same balance
+  // lock; the second read also rejects a concurrent reversal or lot revision.
+  const lockedOriginals = movementIds.length ? await tx.warehouseLedgerMovement.findMany({
+    where: { tenantId: input.tenantId, warehouseId: input.warehouseId, id: { in: movementIds } },
+    include: {
+      reversal: true,
+      createdLot: true,
+      lotAllocations: { orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] },
+      netCostBasisConfirmations: { orderBy: { version: 'desc' }, take: 1 },
+    },
+  }) : []
+  const lockedById = new Map(lockedOriginals.map(row => [row.id, row]))
+  const movements = []
+
+  for (const item of input.items) {
+    if (!item.originalMovementId) continue
+    const original = lockedById.get(item.originalMovementId) || originalsById.get(item.originalMovementId)
+    if (!original
+      || original.sourceType !== 'WarehouseStocktake'
+      || original.sourceId !== input.stocktakeId
+      || original.sourceLineId !== item.stocktakeItemId
+      || original.productId !== item.productId
+      || original.inventoryUnit !== item.inventoryUnit
+      || !['ADJUSTMENT', 'LOSS'].includes(original.type)) {
+      throw businessError(`「${item.productName}」本轮盘点流水来源不一致，不能反审核`, 409)
+    }
+    if (original.reversal) throw businessError(`「${item.productName}」本轮盘点已经冲销，不能重复反审核`, 409)
+    if (original.postingSequence !== item.approvedPostingSequence) {
+      throw businessError(`「${item.productName}」审核后流水序列不一致，不能反审核`, 409)
+    }
+    if (original.netCostBasisConfirmations[0]?.poolNetValueAfter != null) {
+      throw businessError(`「${item.productName}」已核定库存池净成本，不能自动反审核`, 409)
+    }
+    const balance = balances.get(item.productId)!
+    if (!balance.physicalQty.equals(original.physicalAfter)
+      || !balance.reservedQty.equals(original.reservedAfter)
+      || !balance.inventoryValue.equals(original.valueAfter)
+      || !balance.averageUnitCost.equals(original.averageUnitCostAfter)) {
+      throw businessError(`「${item.productName}」当前余额与审核流水不一致，不能反审核`, 409)
+    }
+
+    const quantityAbs = original.physicalDelta.abs().toDecimalPlaces(QTY_DP)
+    if (original.physicalDelta.gt(0)) {
+      const lot = original.createdLot
+      const successor = lot ? await tx.warehouseLedgerLot.findFirst({ where: { tenantId: input.tenantId, replacesLotId: lot.id }, select: { id: true } }) : null
+      if (!lot || successor || !lot.initialQty.equals(quantityAbs) || !lot.remainingQty.equals(lot.initialQty)) {
+        throw businessError(`「${item.productName}」盘盈批次已被使用或修订，不能反审核`, 409)
+      }
+    } else {
+      const allocated = original.lotAllocations.reduce((sum, row) => sum.plus(row.quantity), ZERO).toDecimalPlaces(QTY_DP)
+      if (!allocated.equals(quantityAbs)) throw businessError(`「${item.productName}」盘亏批次分配不完整，不能反审核`, 409)
+      for (const allocation of original.lotAllocations) {
+        const lot = await tx.warehouseLedgerLot.findFirst({ where: { id: allocation.lotId, tenantId: input.tenantId, warehouseId: input.warehouseId, productId: item.productId } })
+        if (!lot || lot.remainingQty.plus(allocation.quantity).gt(lot.initialQty)) {
+          throw businessError(`「${item.productName}」原盘亏批次容量不足，不能反审核`, 409)
+        }
+      }
+    }
+
+    const nextPhysical = balance.physicalQty.minus(original.physicalDelta).toDecimalPlaces(QTY_DP)
+    const nextValue = balance.inventoryValue.minus(original.valueDelta).toDecimalPlaces(VALUE_DP)
+    if (nextPhysical.lt(balance.reservedQty)) throw businessError(`「${item.productName}」反审核后库存将低于活动预占`, 409)
+    if (nextPhysical.lt(0) || nextValue.lt(0) || (nextPhysical.isZero() && !nextValue.isZero())) {
+      throw businessError(`「${item.productName}」反审核后的数量或金额无效`, 409)
+    }
+    const nextAverage = nextAverageCost(nextValue, nextPhysical, original.inventoryUnitCost)
+    const idempotencyKey = `wst-reversal:c${input.postingCycle}:${original.id}`
+    if (idempotencyKey.length > 160) throw businessError('盘点反审核幂等键过长', 400)
+    const movement = await tx.warehouseLedgerMovement.create({
+      data: {
+        tenantId: input.tenantId,
+        warehouseId: input.warehouseId,
+        productId: item.productId,
+        type: 'REVERSAL',
+        physicalDelta: original.physicalDelta.negated(),
+        reservedDelta: ZERO,
+        valueDelta: original.valueDelta.negated(),
+        physicalAfter: nextPhysical,
+        reservedAfter: balance.reservedQty,
+        valueAfter: nextValue,
+        averageUnitCostAfter: nextAverage,
+        originalQuantity: original.originalQuantity,
+        originalUnit: original.originalUnit,
+        conversionFactor: original.conversionFactor,
+        inventoryQuantity: original.inventoryQuantity,
+        inventoryUnit: original.inventoryUnit,
+        inventoryUnitCost: original.inventoryUnitCost,
+        sourceType: 'WarehouseStocktakeReversal',
+        sourceId: input.stocktakeId,
+        sourceLineId: original.id,
+        idempotencyKey,
+        requestFingerprint: fingerprint({ stocktakeId: input.stocktakeId, postingCycle: input.postingCycle, originalMovementId: original.id, reason }),
+        effectiveAt: new Date(),
+        note: `反审核 ${input.stocktakeNo}：${reason}`.slice(0, 240),
+        createdById: input.userId,
+        reversalOfId: original.id,
+      },
+    })
+    await persistBalance(tx, balance, {
+      physicalQty: nextPhysical,
+      reservedQty: balance.reservedQty,
+      inventoryValue: nextValue,
+      averageUnitCost: nextAverage,
+    })
+    balance.rowVersion += 1
+    balance.postingSequence += 1
+
+    if (original.physicalDelta.gt(0)) {
+      const lot = original.createdLot!
+      await tx.warehouseLedgerLot.update({ where: { id: lot.id }, data: { remainingQty: ZERO, depletedAt: new Date() } })
+      await tx.warehouseLedgerLotAllocation.create({
+        data: {
+          tenantId: input.tenantId,
+          warehouseId: input.warehouseId,
+          productId: item.productId,
+          lotId: lot.id,
+          movementId: movement.id,
+          quantity: lot.remainingQty,
+          unitCost: lot.inventoryUnitCost,
+          value: lot.remainingQty.mul(lot.inventoryUnitCost).toDecimalPlaces(VALUE_DP),
+        },
+      })
+    } else {
+      for (const allocation of original.lotAllocations) {
+        await tx.warehouseLedgerLot.update({
+          where: { id: allocation.lotId },
+          data: { remainingQty: { increment: allocation.quantity }, depletedAt: null },
+        })
+      }
+    }
+    await applyMarkupReprice(tx, {
+      tenantId: input.tenantId,
+      productId: item.productId,
+      averageUnitCost: nextAverage,
+      trigger: { type: 'WarehouseStocktakeReversal', id: movement.id },
+    })
+    movements.push(movement)
+  }
+
+  return {
+    movements,
+    balances: new Map([...balances].map(([productId, balance]) => [productId, {
+      physicalQty: balance.physicalQty,
+      reservedQty: balance.reservedQty,
+      inventoryValue: balance.inventoryValue,
+      averageUnitCost: balance.averageUnitCost,
+      postingSequence: balance.postingSequence,
+      rowVersion: balance.rowVersion,
+    }])),
+  }
 }
 
 /**
@@ -2197,6 +2452,8 @@ export async function reverseManualWarehouseInbound(input: {
   movementId: string
   reason: string
   idempotencyKey: string
+  /** Only document-level atomic workflows may reverse a movement linked to a WarehouseDoc. */
+  allowLinkedDocument?: boolean
 }, transaction?: Prisma.TransactionClient) {
   const db = transaction ?? prisma
   const warehouseId = await resolveTenantWarehouseId(db, input.tenantId, input.warehouseId)
@@ -2231,6 +2488,7 @@ export async function reverseManualWarehouseInbound(input: {
       const doc = await tx.warehouseDoc.findFirst({ where: { id: linkedLine.docId, tenantId: input.tenantId } })
       if (doc?.reviewStatus === 'REVIEWED') throw businessError('已复审的入库不能冲销', 409)
       if (doc?.status === 'CONFIRMED') throw businessError('请先对入库单反审核，再冲销', 409)
+      if (!input.allowLinkedDocument) throw businessError('关联入库单不能单条冲销，请到入库单整单作废或修改', 409)
     }
     const balances = await lockBalances(tx, {
       tenantId: input.tenantId,

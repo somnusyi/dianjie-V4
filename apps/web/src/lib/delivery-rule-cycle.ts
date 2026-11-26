@@ -14,6 +14,15 @@ export type DeliveryScheduleLike = {
   deliveryIntervalStart?: Date | string | null
 }
 
+export type DeliveryOrderDayLike = DeliveryScheduleLike & {
+  leadDays?: number
+  orderWindowStart?: string | null
+  orderWindowEnd?: string | null
+  effectiveFrom?: Date | string | null
+  effectiveTo?: Date | string | null
+  status?: string
+}
+
 function businessDateKey(value: Date | string): string {
   return dayjs(value).tz(BUSINESS_TZ).format('YYYY-MM-DD')
 }
@@ -50,4 +59,23 @@ export function nextDeliveryScheduleDates(rule: DeliveryScheduleLike, fromDateKe
     cursor = cursor.add(1, 'day')
   }
   return dates
+}
+
+/** Projects one business day without inventing a separate order-weekday rule. */
+export function deliveryOrderDayProjection(rule: DeliveryOrderDayLike, dateKey: string) {
+  const effectiveFrom = rule.effectiveFrom ? businessDateKey(rule.effectiveFrom) : null
+  const effectiveTo = rule.effectiveTo ? businessDateKey(rule.effectiveTo) : null
+  const active = rule.status !== 'DISABLED'
+    && (!effectiveFrom || dateKey >= effectiveFrom)
+    && (!effectiveTo || dateKey <= effectiveTo)
+  if (!active) return null
+  const leadDays = Math.max(1, Math.trunc(rule.leadDays || 1))
+  const arrivalDate = nextDeliveryScheduleDates(rule, dateKey, leadDays)[leadDays - 1] || null
+  if (!arrivalDate) return null
+  return {
+    arrivalDate,
+    windowLabel: rule.orderWindowStart && rule.orderWindowEnd
+      ? `${rule.orderWindowStart}～${rule.orderWindowEnd}`
+      : '全天',
+  }
 }

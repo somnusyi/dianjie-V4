@@ -60,7 +60,7 @@ describe('供应商集中档案页', () => {
     expect(text).toContain('财务信息')
     expect(text).toContain('开票资料')
     expect(text).toContain('年度合同')
-    expect(text).toContain('直接复用采购中的合同真相')
+    expect(text).toContain('管理合同')
     expect(text).toContain('每次来货检疫证明在到货单独关联')
     expect(text).toContain('内容已受保护')
     expect(text).not.toContain('FAKE-ACCOUNT')

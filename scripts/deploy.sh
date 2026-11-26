@@ -205,16 +205,16 @@ sleep 5  # 给进程 warm-up
 # 最低限度: health check
 HEALTH=$(curl -sf https://www.njdianjie.com/api/health || echo "FAIL")
 if [[ "$HEALTH" == FAIL* ]]; then
-  echo "❌ /api/health 失败 — 立即回滚！"
-  echo "   ./scripts/rollback.sh"
+  echo "❌ /api/health 失败 — 停止后续操作并按当前版本受审恢复方案处理"
+  echo "   旧 scripts/rollback.sh 已停用；见 docs/ops/G02_COMPATIBLE_ROLLBACK.md"
   exit 1
 fi
 echo "   /api/health: $HEALTH"
 
 if [ $SKIP_TESTS -eq 0 ]; then
   bash "$SCRIPT_DIR/smoke-test.sh" "https://www.njdianjie.com" || {
-    echo "❌ Smoke test 失败，发布不记为成功。请立即评估回滚:"
-    echo "   ./scripts/rollback.sh"
+    echo "❌ Smoke test 失败，发布不记为成功。请按当前版本受审恢复方案评估:"
+    echo "   旧 scripts/rollback.sh 已停用；见 docs/ops/G02_COMPATIBLE_ROLLBACK.md"
     exit 1
   }
 fi

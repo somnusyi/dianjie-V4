@@ -29,11 +29,48 @@ export function businessDateKey(at: Date | string | number = new Date()): string
   return dayjs(at).tz(BUSINESS_TZ).format('YYYY-MM-DD')
 }
 
+function calendarDateKey(value: Date | string, dateMeansPostgresDate = false) {
+  if (value instanceof Date) return dateMeansPostgresDate ? value.toISOString().slice(0, 10) : businessDateKey(value)
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value
+  return businessDateKey(value)
+}
+
+function utcCalendarDay(key: string) {
+  const value = dayjs.utc(`${key}T00:00:00.000Z`)
+  if (!value.isValid() || value.format('YYYY-MM-DD') !== key) throw new Error('业务日期无效')
+  return value
+}
+
+function shanghaiMidnight(key: string) {
+  return dayjs.tz(key, BUSINESS_TZ).toDate()
+}
+
 /** A PostgreSQL DATE encodes a business day at UTC midnight, not an instant. */
 export function businessDateOnlyRange(date: Date | string) {
-  const key = date instanceof Date ? date.toISOString().slice(0, 10) : date
-  const start = dayjs.tz(key, BUSINESS_TZ).startOf('day')
-  return { start: start.toDate(), endExclusive: start.add(1, 'day').toDate() }
+  const key = calendarDateKey(date, true)
+  const calendar = utcCalendarDay(key)
+  return {
+    start: shanghaiMidnight(key),
+    endExclusive: shanghaiMidnight(calendar.add(1, 'day').format('YYYY-MM-DD')),
+  }
+}
+
+export type BusinessPeriodUnit = 'DAY' | 'WEEK' | 'MONTH'
+
+/**
+ * Build a Shanghai-business period ending at the exclusive midnight after the
+ * selected count day. WEEK follows ISO Monday; MONTH never reads future days.
+ */
+export function businessPeriodToDateRange(date: Date | string, unit: BusinessPeriodUnit) {
+  const key = calendarDateKey(date, true)
+  const countDay = utcCalendarDay(key)
+  const startKey = unit === 'DAY'
+    ? key
+    : unit === 'MONTH'
+      ? countDay.startOf('month').format('YYYY-MM-DD')
+      : countDay.subtract((countDay.day() + 6) % 7, 'day').format('YYYY-MM-DD')
+  const endKey = countDay.add(1, 'day').format('YYYY-MM-DD')
+  return { start: shanghaiMidnight(startKey), endExclusive: shanghaiMidnight(endKey) }
 }
 
 /** 业务时间戳 YYYYMMDD_HHmmss（业务时区），用于导出文件名。 */
@@ -51,13 +88,12 @@ export function businessCompactTimestampKey(at: Date | string | number = new Dat
  * 例如上海 9 月 1 日对应 UTC 8 月 31 日 16:00，避免月初/月底漏单。
  */
 export function businessDateRangeInclusive(start: Date | string, end: Date | string) {
-  const startKey = businessDateKey(start)
-  const endKey = businessDateKey(end)
-  const startAt = dayjs.tz(startKey, BUSINESS_TZ).startOf('day')
-  const endAt = dayjs.tz(endKey, BUSINESS_TZ).startOf('day')
+  const startKey = calendarDateKey(start)
+  const endKey = calendarDateKey(end)
+  const endDay = utcCalendarDay(endKey)
   return {
-    start: startAt.toDate(),
-    end: endAt.toDate(),
-    endExclusive: endAt.add(1, 'day').toDate(),
+    start: shanghaiMidnight(startKey),
+    end: shanghaiMidnight(endKey),
+    endExclusive: shanghaiMidnight(endDay.add(1, 'day').format('YYYY-MM-DD')),
   }
 }

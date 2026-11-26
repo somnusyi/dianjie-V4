@@ -1,16 +1,13 @@
 /**
- * 反馈系统 P0: 用户反馈 → AI (Qwen) 澄清分诊 → 管理员审批
+ * 用户反馈：提交、AI 澄清、本人查看与补充。反馈审批已移除。
  *
  * - POST   /api/feedback              创建反馈后立即返回, 后台生成 AI 首轮澄清回复
  * - POST   /api/feedback/:id/messages 用户发言落库后立即返回, 后台生成 AI 回复
  * - GET    /api/feedback/mine         我提的列表
- * - GET    /api/feedback/admin/inbox  待批列表 (仅 SUPER_ADMIN)
  * - GET    /api/feedback/:id          详情含 messages (本人或 SUPER_ADMIN)
- * - POST   /api/feedback/:id/decision 批准/驳回 (仅 SUPER_ADMIN, 写 OpLog + 消息中心)
- * - POST   /api/feedback/:id/resolve  标记已解决 (仅 SUPER_ADMIN, 闭环 + 通知提报人)
  *
  * 分诊: AI 回复末尾的 triage 标记块由 feedbackTriage 解析 strip;
- *   BUG_BLOCKING → AWAITING_APPROVAL+紧急企微 | IMPROVEMENT/NEW_FEATURE → AWAITING_APPROVAL+审批卡片
+ *   BUG_BLOCKING → 保留记录并紧急提醒人工处理；改进和需求继续留在反馈记录中
  *   QUESTION → CLOSED 闭环
  */
 import { FastifyPluginAsync } from 'fastify'
@@ -21,8 +18,6 @@ import { sendNotification } from '../services/notification'
 import { qwenChat, buildFeedbackSystemPrompt, QWEN_NOT_CONFIGURED, QwenChatMessage } from '../services/qwenChat'
 import { fetchFeedbackImageParts } from '../services/feedbackImages'
 import { parseTriageBlock, decideTriageAction, TriageResult } from '../services/feedbackTriage'
-import { executeApprovedRun } from '../services/autofix/deployment'
-import { enqueueAgentDev, runTier2Dev } from '../services/autofix/tier2'
 import { resignOssUrls } from './upload'
 
 const auth = (app: any) => ({ preHandler: [app.authenticate] })
@@ -46,35 +41,17 @@ const messageSchema = z.object({
   content: z.string().trim().min(1, '请输入内容').max(2000),
 }).strict()
 
-const decisionSchema = z.object({
-  action: z.enum(['approve', 'reject'], { errorMap: () => ({ message: 'action 必须是 approve / reject' }) }),
-  note: z.string().trim().max(300).optional(),
-}).strict().refine(
-  (d) => d.action !== 'reject' || !!d.note,
-  { message: '驳回时请填写理由', path: ['note'] },
-)
-
-const resolveSchema = z.object({
-  note: z.string().trim().max(300).optional(),
-}).strict()
-
-const inboxQuerySchema = z.object({
-  status: z.enum(['CLARIFYING', 'AWAITING_APPROVAL', 'APPROVED', 'REJECTED', 'IN_DEV', 'RESOLVED', 'CLOSED'])
-    .default('AWAITING_APPROVAL'),
-}).strict()
-
 type FeedbackCtx = z.infer<typeof contextSchema>
 
 interface Actor { tenantId: string; userId: string; role: string; storeId?: string | null }
 
-/** 越权防护: 只有提报人本人或 SUPER_ADMIN/ADMIN 能看/发消息 */
+/** 只有提报人本人或原有超级管理员能看、补充反馈。 */
 function canAccess(actor: Actor, reporterId: string): boolean {
   return actor.userId === reporterId || ADMIN_ROLES.has(actor.role)
 }
 
 /**
- * 分诊落库 + 通知 (BUG 紧急企微 / 审批卡片 / 消息中心进度)
- * 只在反馈仍处于 CLARIFYING 时调用 (已进入审批流后不再重复分诊)
+ * 分诊落库 + 紧急故障提醒；不生成反馈审批任务。
  */
 async function applyTriage(actor: Actor, feedback: { id: string; reporterId: string }, triage: TriageResult, ctx: FeedbackCtx) {
   const action = decideTriageAction(triage)
@@ -103,19 +80,6 @@ async function applyTriage(actor: Actor, feedback: { id: string; reporterId: str
       payload: {
         feedbackId: feedback.id,
         title: triage.title || '紧急故障',
-        summary: triage.summary || '',
-        reporterName, storeName: ctx.storeName,
-      },
-    })
-  } else if (action.notifyEvent === 'FEEDBACK_APPROVAL_PENDING') {
-    notify({
-      tenantId: actor.tenantId,
-      event: 'FEEDBACK_APPROVAL_PENDING',
-      eventKey: `FEEDBACK:${feedback.id}:PENDING`,
-      payload: {
-        feedbackId: feedback.id,
-        category: triage.category,
-        title: triage.title || '反馈待审批',
         summary: triage.summary || '',
         reporterName, storeName: ctx.storeName,
       },
@@ -223,7 +187,7 @@ function enqueueAssistant(actor: Actor, feedbackId: string) {
           tenantId: actor.tenantId,
           feedbackId,
           role: 'assistant',
-          content: '你的反馈已记录。AI 整理暂时失败，管理员仍可直接查看和处理，无需重复提交。',
+          content: '你的反馈已记录。AI 整理暂时失败，可在“我的反馈”继续补充，无需重复提交。',
         },
       }).catch(() => undefined)
     })
@@ -322,28 +286,6 @@ export const feedbackRoutes: FastifyPluginAsync = async (app) => {
     })
   })
 
-  // ── 管理端待批列表 ───────────────────────────────────
-  app.get('/admin/inbox', auth(app), async (req: any, reply: any) => {
-    const actor: Actor = req.user
-    if (!ADMIN_ROLES.has(actor.role)) return reply.status(403).send({ error: '无权限' })
-    const parsed = inboxQuerySchema.safeParse(req.query || {})
-    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
-
-    const list = await prisma.feedback.findMany({
-      where: { tenantId: actor.tenantId, status: parsed.data.status },
-      orderBy: { updatedAt: 'desc' },
-      take: 100,
-      include: { reporter: { select: { id: true, name: true, role: true } } },
-    })
-    return list.map((f) => ({
-      id: f.id, category: f.category, status: f.status, title: f.title,
-      summary: f.summary, proposal: f.proposal, attachments: resignOssUrls(f.attachments),
-      createdAt: f.createdAt, updatedAt: f.updatedAt,
-      reporter: f.reporter,
-      storeName: (f.context as any)?.storeName || null,
-    }))
-  })
-
   // ── 详情 (含 messages) ───────────────────────────────
   app.get('/:id', auth(app), async (req: any, reply: any) => {
     const actor: Actor = req.user
@@ -359,225 +301,4 @@ export const feedbackRoutes: FastifyPluginAsync = async (app) => {
     return { ...feedback, attachments: resignOssUrls(feedback.attachments) }
   })
 
-  // ── 批准 / 驳回 ─────────────────────────────────────
-  app.post('/:id/decision', auth(app), async (req: any, reply: any) => {
-    const actor: Actor = req.user
-    if (!ADMIN_ROLES.has(actor.role)) return reply.status(403).send({ error: '无权限' })
-    const parsed = decisionSchema.safeParse(req.body)
-    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
-    const { action, note } = parsed.data
-
-    const result = await prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`feedback:${String(req.params.id)}`}))::text AS locked`
-      const feedback = await tx.feedback.findFirst({
-        where: { id: String(req.params.id), tenantId: actor.tenantId },
-      })
-      if (!feedback) return { status: 404, error: '反馈不存在' }
-      if (feedback.status !== 'AWAITING_APPROVAL') return { status: 400, error: '该反馈不在待审批状态' }
-
-      const next = action === 'approve' ? 'IN_DEV' : 'REJECTED'
-      await tx.feedback.update({
-        where: { id: feedback.id },
-        data: {
-          status: next as any,
-          decisionById: actor.userId,
-          decisionAt: new Date(),
-          decisionNote: note || null,
-        },
-      })
-      await tx.opLog.create({
-        data: {
-          tenantId: actor.tenantId, userId: actor.userId, role: actor.role,
-          action: `${action === 'approve' ? '批准' : '驳回'}反馈「${feedback.title || feedback.id}」${note ? `: ${note}` : ''}`,
-          entityType: 'Feedback', targetId: feedback.id,
-          metadata: { decision: action, category: feedback.category } as any,
-        },
-      })
-      await tx.feedbackMessage.create({
-        data: {
-          tenantId: actor.tenantId, feedbackId: feedback.id, role: 'system',
-          content: action === 'approve'
-            ? '管理员已批准该方案，正在创建开发任务，进展会在消息中心通知你。'
-            : `管理员驳回了该反馈${note ? `：${note}` : '。'}如有疑问可重新提交补充说明。`,
-        },
-      })
-      return { status: 200, ok: true, feedback }
-    })
-    if ('error' in result) return reply.status(result.status).send({ error: result.error })
-
-    let autoRunId: string | null = null
-    let automationStatus = action === 'approve' ? 'disabled' : 'not_requested'
-    if (action === 'approve') {
-      // 档2分支：该反馈已有自动修复任务且停在审批节点 → 按阶段推进，而不是重新入队
-      const existingRun = await prisma.autoFixRun.findUnique({
-        where: { feedbackId: result.feedback.id },
-        select: { id: true, status: true },
-      })
-      if (existingRun && String(existingRun.status) === 'TASKBOOK_READY') {
-        await prisma.autoFixRun.update({
-          where: { id: existingRun.id },
-          data: { status: 'QWEN_DEV' as any, decidedById: actor.userId, decidedAt: new Date(), error: null },
-        })
-        await prisma.feedbackMessage.create({
-          data: {
-            tenantId: actor.tenantId,
-            feedbackId: result.feedback.id,
-            role: 'system',
-            content: '管理员已批准开发方案，服务器 AI 开始在隔离环境开发；完成并通过测试后会再请你批准上线。',
-          },
-        })
-        setImmediate(() => void runTier2Dev(existingRun.id).catch((e) => console.error('[tier2] 开发执行异常:', e)))
-        autoRunId = existingRun.id
-        automationStatus = 'tier2_dev'
-      } else if (existingRun && String(existingRun.status) === 'DEPLOY_REVIEW') {
-        await prisma.autoFixRun.update({
-          where: { id: existingRun.id },
-          data: { status: 'DEPLOYING' as any, decidedById: actor.userId, decidedAt: new Date(), error: null },
-        })
-        await prisma.feedbackMessage.create({
-          data: {
-            tenantId: actor.tenantId,
-            feedbackId: result.feedback.id,
-            role: 'system',
-            content: '管理员已批准上线，系统开始安全发布（含生产验证与自动回滚兜底）。',
-          },
-        })
-        setImmediate(() => void executeApprovedRun(existingRun.id).catch((e) => console.error('[tier2] 发布执行异常:', e)))
-        autoRunId = existingRun.id
-        automationStatus = 'tier2_deploy'
-      } else {
-        try {
-          // 统一 agent 管线：Qwen Code 自己定位/设计/开发/自测；approved_auto 下测试通过即自动上线。
-          autoRunId = await enqueueAgentDev({
-            tenantId: actor.tenantId,
-            feedbackId: result.feedback.id,
-            approvedById: actor.userId,
-          })
-          automationStatus = autoRunId ? 'agent_dev' : 'disabled'
-          await prisma.feedbackMessage.create({
-            data: {
-              tenantId: actor.tenantId,
-              feedbackId: result.feedback.id,
-              role: 'system',
-              content: autoRunId
-                ? '管理员已批准，AI 开始自动设计方案、开发并运行全部测试；低风险改动测试通过后会自动安全上线，涉及安全红线的改动仍会转人工。'
-                : '当前自动开发开关未启用，反馈已保留在开发中并转为人工跟进。',
-            },
-          })
-        } catch (error: any) {
-          automationStatus = 'queue_failed'
-          const message = error?.message || String(error)
-          console.error('[autofix] 批准后入队失败:', error)
-          await prisma.$transaction([
-            prisma.feedbackMessage.create({
-              data: {
-                tenantId: actor.tenantId,
-                feedbackId: result.feedback.id,
-                role: 'system',
-                content: '自动开发任务创建失败，已保留审批结果并转人工处理，管理员会收到异常记录。',
-              },
-            }),
-            prisma.opLog.create({
-              data: {
-                tenantId: actor.tenantId,
-                userId: actor.userId,
-                role: actor.role,
-                action: `反馈批准后自动开发入队失败: ${message}`.slice(0, 500),
-                entityType: 'Feedback',
-                targetId: result.feedback.id,
-                metadata: { automationStatus: 'queue_failed' } as any,
-              },
-            }),
-          ])
-        }
-      }
-    } else {
-      // 驳回时同步终结停在审批节点的档2任务
-      await prisma.autoFixRun.updateMany({
-        where: {
-          feedbackId: result.feedback.id,
-          status: { in: ['TASKBOOK_READY', 'DEPLOY_REVIEW'] as any },
-        },
-        data: { status: 'REJECTED' as any, decidedById: actor.userId, decidedAt: new Date(), error: note || '管理员驳回' },
-      })
-    }
-
-    // App 内消息中心通知提报人 (企微决策通知 P1 再接)
-    try {
-      const feedback = result.feedback
-      const reporter = await prisma.user.findUnique({ where: { id: feedback.reporterId }, select: { role: true } })
-      await sendNotification({
-        tenantId: actor.tenantId,
-        recipientRole: reporter?.role || 'MANAGER',
-        recipientId: feedback.reporterId,
-        type: 'FEEDBACK_RESULT',
-        title: action === 'approve' ? `反馈已批准: ${feedback.title || ''}` : `反馈已驳回: ${feedback.title || ''}`,
-        body: action === 'approve'
-          ? (autoRunId ? '方案已批准，系统已开始自动开发和测试。' : '方案已批准，当前转人工开发跟进。')
-          : `驳回理由: ${note || '无'}`,
-        refType: 'Feedback',
-        refId: feedback.id,
-        dedupeKey: `FEEDBACK_RESULT:${feedback.id}:${action}`,
-      })
-    } catch (e) {
-      console.error('[feedback] 决策通知写入失败:', e)
-    }
-    return { ok: true, autoRunId, automationStatus }
-  })
-
-  // ── 标记已解决 (仅 SUPER_ADMIN, 闭环 + 通知提报人) ─────
-  app.post('/:id/resolve', auth(app), async (req: any, reply: any) => {
-    const actor: Actor = req.user
-    if (!ADMIN_ROLES.has(actor.role)) return reply.status(403).send({ error: '无权限' })
-    const parsed = resolveSchema.safeParse(req.body ?? {})
-    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0].message })
-    const { note } = parsed.data
-
-    const result = await prisma.$transaction(async (tx) => {
-      await tx.$queryRaw`SELECT pg_advisory_xact_lock(hashtext(${`feedback:${String(req.params.id)}`}))::text AS locked`
-      const feedback = await tx.feedback.findFirst({
-        where: { id: String(req.params.id), tenantId: actor.tenantId },
-      })
-      if (!feedback) return { status: 404, error: '反馈不存在' }
-      if (!['CLARIFYING', 'AWAITING_APPROVAL', 'APPROVED', 'IN_DEV'].includes(feedback.status)) {
-        return { status: 400, error: '该反馈当前状态无法标记已解决' }
-      }
-      await tx.feedback.update({ where: { id: feedback.id }, data: { status: 'RESOLVED' } })
-      await tx.feedbackMessage.create({
-        data: {
-          tenantId: actor.tenantId, feedbackId: feedback.id, role: 'assistant',
-          content: note?.trim() || '该问题已处理完成，标记为已解决。如仍有问题请继续留言或重新提交。',
-        },
-      })
-      await tx.opLog.create({
-        data: {
-          tenantId: actor.tenantId, userId: actor.userId, role: actor.role,
-          action: `标记反馈「${feedback.title || feedback.id}」已解决${note ? `: ${note}` : ''}`,
-          entityType: 'Feedback', targetId: feedback.id,
-          metadata: { resolve: true, category: feedback.category } as any,
-        },
-      })
-      return { status: 200, ok: true, feedback }
-    })
-    if ('error' in result) return reply.status(result.status).send({ error: result.error })
-
-    try {
-      const feedback = result.feedback
-      const reporter = await prisma.user.findUnique({ where: { id: feedback.reporterId }, select: { role: true } })
-      await sendNotification({
-        tenantId: actor.tenantId,
-        recipientRole: reporter?.role || 'MANAGER',
-        recipientId: feedback.reporterId,
-        type: 'FEEDBACK_RESULT',
-        title: `反馈已解决: ${feedback.title || ''}`,
-        body: note?.trim() || '问题已处理完成，如仍有问题可继续留言。',
-        refType: 'Feedback',
-        refId: feedback.id,
-        dedupeKey: `FEEDBACK_RESULT:${feedback.id}:resolved`,
-      })
-    } catch (e) {
-      console.error('[feedback] 解决通知写入失败:', e)
-    }
-    return { ok: true }
-  })
 }

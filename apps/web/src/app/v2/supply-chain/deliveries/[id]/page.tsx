@@ -25,6 +25,7 @@ type DeliveryDetail = {
   status: string
   createdAt: string
   shippedAt?: string | null
+  deliveredAt?: string | null
   pickerNameSnapshot?: string | null
   driverNameSnapshot?: string | null
   purchaseOrder?: { id: string; no: string } | null
@@ -124,6 +125,7 @@ export default function DeliveryProfitDetailPage() {
               <Fact label="供应商" value={delivery.supplier?.name || '—'} />
               <Fact label="创建时间" value={orderDateTimeText(delivery.createdAt)} />
               <Fact label="发货时间" value={orderDateTimeText(delivery.shippedAt)} />
+              <Fact label="实际送达时间" value={orderDateTimeText(delivery.deliveredAt)} />
               <Fact label="实际分拣负责人" value={delivery.pickerNameSnapshot || '未记录'} />
               <Fact label="实际配送/司机" value={delivery.driverNameSnapshot || '未记录'} />
               <Fact label="原发货金额" value={money(delivery.profitability?.shippedAmount)} />

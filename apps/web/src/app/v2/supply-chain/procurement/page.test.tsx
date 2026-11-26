@@ -252,7 +252,7 @@ function installPageMock(
   const warehouses = options.warehouses ?? []
   mockFetch.mockImplementation((path, init) => {
     const url = String(path)
-    if (url.startsWith('/api/upstream/purchase-orders?') && !init) return Promise.resolve({items:orders,total:orders.length,page:1,pageSize:20})
+    if (url.startsWith('/api/upstream/purchase-orders?') && !init) return Promise.resolve({items:orders,total:orders.length,page:1,pageSize:20,summary:{pendingOrders:0,pendingReceipts:0,pendingClaims:0}})
     if (url === '/api/upstream/shipments') return Promise.resolve(shipments)
     if (url === '/api/upstream/receipts') return Promise.resolve(receipts)
     if (url === '/api/upstream/purchase-returns') return Promise.resolve(purchaseReturns)
@@ -378,7 +378,7 @@ describe('上游采购收货后补报', () => {
     mockFetch.mockReset()
     mockFetch.mockImplementation((path, init) => {
       const url = String(path)
-      if (url.startsWith('/api/upstream/purchase-orders?')) return Promise.resolve({items:[],total:0,page:1,pageSize:20})
+      if (url.startsWith('/api/upstream/purchase-orders?')) return Promise.resolve({items:[],total:0,page:1,pageSize:20,summary:{pendingOrders:0,pendingReceipts:0,pendingClaims:0}})
       if (url === '/api/upstream/shipments') return Promise.resolve([])
       if (url === '/api/upstream/receipts') return Promise.resolve([postedReceipt])
       if (url === '/api/upstream/purchase-returns') return Promise.resolve([])
@@ -401,9 +401,11 @@ describe('上游采购收货后补报', () => {
 
   it('requires evidence and sends a stable idempotency key with the original receipt line', async () => {
     const { container, root } = renderPage()
-    await waitFor(() => container.textContent?.includes('上游采购与供应商协同') ?? false)
+    await waitFor(() => container.textContent?.includes('到货验收') ?? false)
     const receiptTab = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === '到货验收')
     act(() => receiptTab?.click())
+    await waitFor(() => Boolean(container.querySelector(`button[aria-label="查看收货单 ${postedReceipt.no} 明细"]`)))
+    await act(async () => (container.querySelector(`button[aria-label="查看收货单 ${postedReceipt.no} 明细"]`) as HTMLButtonElement).click())
     await waitFor(() => container.textContent?.includes('收货后补报异常') ?? false)
 
     const openButton = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === '收货后补报异常')
@@ -525,7 +527,7 @@ describe('上游采购收货后补报', () => {
     }
     mockFetch.mockImplementation((path, init) => {
       const url = String(path)
-      if (url.startsWith('/api/upstream/purchase-orders?')) return Promise.resolve({items:[],total:0,page:1,pageSize:20})
+      if (url.startsWith('/api/upstream/purchase-orders?')) return Promise.resolve({items:[],total:0,page:1,pageSize:20,summary:{pendingOrders:0,pendingReceipts:0,pendingClaims:0}})
       if (url === '/api/upstream/shipments') return Promise.resolve([])
       if (url === '/api/upstream/receipts') return Promise.resolve([postedReceipt])
       if (url === '/api/upstream/purchase-returns') return Promise.resolve([])
@@ -546,12 +548,14 @@ describe('上游采购收货后补报', () => {
     })
 
     const { container, root } = renderPage()
-    await waitFor(() => container.textContent?.includes('上游采购与供应商协同') ?? false)
+    await waitFor(() => container.textContent?.includes('到货验收') ?? false)
     act(() =>
       Array.from(container.querySelectorAll('button'))
         .find((button) => button.textContent === '到货验收')
         ?.click()
     )
+    await waitFor(() => Boolean(container.querySelector(`button[aria-label="查看收货单 ${postedReceipt.no} 明细"]`)))
+    await act(async () => (container.querySelector(`button[aria-label="查看收货单 ${postedReceipt.no} 明细"]`) as HTMLButtonElement).click())
     await waitFor(() => container.textContent?.includes('收货后补报异常') ?? false)
     const openClaim = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === '收货后补报异常')
     expect(openClaim).toBeTruthy()
@@ -609,6 +613,7 @@ describe('上游采购收货后补报', () => {
 
   it('采购单号可直接打开完整商品明细', async () => {
     installPageMock({ orders: [changeOrder], orderDetail: changeOrderDetail })
+    window.history.replaceState({}, '', '/v2/supply-chain/procurement?tab=orders&view=history')
     const { container, root } = renderPage()
     await waitFor(() => container.textContent?.includes(changeOrder.no) ?? false)
 
@@ -631,6 +636,7 @@ describe('上游采购收货后补报', () => {
 
   it('改单必须先看原数量和新数量，之后才能接受', async () => {
     installPageMock({ orders: [changeOrder], orderDetail: changeOrderDetail })
+    window.history.replaceState({}, '', '/v2/supply-chain/procurement?tab=orders&view=history')
     const { container, root } = renderPage()
     await waitFor(() => container.textContent?.includes('查看改单内容') ?? false)
     expect(container.textContent).not.toContain('确认接受改单')
@@ -705,266 +711,165 @@ describe('上游采购收货后补报', () => {
     container.remove()
   })
 
-  it('合同名称可进入合同内容并查看逐商品价格字段', async () => {
+  it('合同档案保留合同信息，不显示商品价格和数量', async () => {
     installPageMock({ contracts: [contract] })
+    window.history.replaceState({}, '', '/v2/supply-chain/procurement?tab=contracts')
     const { container, root } = renderPage()
-    await waitFor(() => container.textContent?.includes('合同与价格') ?? false)
-    act(() =>
-      Array.from(container.querySelectorAll('button'))
-        .find((button) => button.textContent === '合同与价格')
-        ?.click()
-    )
     await waitFor(() => Boolean(container.querySelector(`button[aria-label="查看合同 ${contract.title} 内容"]`)))
-    const open = container.querySelector(`button[aria-label="查看合同 ${contract.title} 内容"]`) as HTMLButtonElement
-    act(() => open.click())
-    await waitFor(() => container.textContent?.includes('合同内容 · 2026年菌菇供货合同') ?? false)
-
-    expect(container.textContent).toContain('赤松茸A')
-    expect(container.textContent).toContain('供应商编码')
-    expect(container.textContent).toContain('合同单价')
-    expect(container.textContent).toContain('不含税价')
-    expect(container.textContent).toContain('月结 · 30 天')
-
-    act(() => root.unmount())
-    container.remove()
-  })
-
-  it('新建采购单按供应商自动带出唯一生效合同', async () => {
-    installPageMock({
-      contracts: [contract],
-      warehouses: [{ id: 'warehouse-1', code: 'WH001', name: '供应链总仓' }],
-    })
-    const { container, root } = renderPage()
-    await waitFor(() => container.textContent?.includes('新建采购单') ?? false)
-    act(() =>
-      Array.from(container.querySelectorAll('button'))
-        .find((button) => button.textContent === '新建采购单')
-        ?.click()
-    )
-    await waitFor(() => container.textContent?.includes('已自动带出合同') ?? false)
-
+    act(() => (container.querySelector(`button[aria-label="查看合同 ${contract.title} 内容"]`) as HTMLButtonElement).click())
     expect(container.textContent).toContain(contract.contractNo)
-    expect(container.textContent).toContain('尚未添加商品')
-    expect(container.querySelector('input[aria-label="赤松茸A采购数量"]')).toBeNull()
-    const search = container.querySelector('input[aria-label="搜索采购商品"]') as HTMLInputElement
-    change(search, '赤松茸')
-    const add = container.querySelector('button[aria-label="添加采购商品 赤松茸A"]') as HTMLButtonElement
-    expect(add).toBeTruthy()
-    act(() => add.click())
-    expect(container.querySelector('input[aria-label="赤松茸A采购数量"]')).toBeTruthy()
-    act(() => (container.querySelector('button[aria-label="移除采购商品 赤松茸A"]') as HTMLButtonElement).click())
-    expect(container.querySelector('input[aria-label="赤松茸A采购数量"]')).toBeNull()
-    expect(container.textContent).not.toContain('多份请选')
-    change(search, '赤松茸')
-    act(() => (container.querySelector('button[aria-label="添加采购商品 赤松茸A"]') as HTMLButtonElement).click())
-    act(() => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '关闭')!.click())
-    act(() => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '新建采购单')!.click())
-    expect(container.querySelector('input[aria-label="赤松茸A采购数量"]')).toBeNull()
-    expect(container.textContent).toContain('尚未添加商品')
-
-    act(() => root.unmount())
-    container.remove()
+    expect(container.textContent).toContain('月结 · 30 天')
+    expect(container.textContent).not.toContain('合同单价')
+    act(() => root.unmount()); container.remove()
   })
 
-  it('多份生效合同才显示合同选择器', async () => {
-    const another = {
-      ...contract,
-      id: 'contract-2',
-      contractNo: 'HT202609-02',
-      title: '菌菇供货合同二',
-    }
-    installPageMock({
-      contracts: [contract, another],
-      warehouses: [{ id: 'warehouse-1', code: 'WH001', name: '供应链总仓' }],
-    })
+  it('新建采购单搜索商品并按本单数量和单价提交，不要求合同', async () => {
+    const source = { id: 'source-1', supplierId: postedReceipt.supplier.id, purchaseUnit: 'kg', quotedUnitPrice: 88,
+      minOrderQty: 1, inventoryUnitsPerPurchaseUnit: 1,
+      product: { id: 'product-1', code: 'P001', name: '人工见手青', spec: 'kg', inventoryUnit: 'kg', unit: 'kg' } }
+    installPageMock({ sources: [source], warehouses: [{ id: 'warehouse-1', code: 'WH001', name: '供应链总仓' }] })
+    const normal = mockFetch.getMockImplementation()!
+    mockFetch.mockImplementation((path, init) => String(path) === '/api/upstream/purchase-orders/direct' && init?.method === 'POST'
+      ? Promise.resolve({ id: 'new-order' })
+      : String(path) === '/api/upstream/purchase-orders/new-order'
+        ? Promise.resolve({ ...changeOrderDetail, id: 'new-order', no: 'UPO-NEW-001', status: 'DRAFT' })
+        : normal(path, init))
+    window.history.replaceState({}, '', '/v2/supply-chain/procurement')
     const { container, root } = renderPage()
-    await waitFor(() => container.textContent?.includes('新建采购单') ?? false)
-    act(() =>
-      Array.from(container.querySelectorAll('button'))
-        .find((button) => button.textContent === '新建采购单')
-        ?.click()
-    )
-    await waitFor(() => container.textContent?.includes('多份请选') ?? false)
-
-    expect(container.textContent).toContain('HT202609-01')
-    expect(container.textContent).toContain('HT202609-02')
-
-    act(() => root.unmount())
-    container.remove()
+    await waitFor(() => container.textContent?.includes('发起采购单') ?? false)
+    await waitFor(() => Boolean(container.querySelector('select[aria-label="采购供应商"]')))
+    expect((container.querySelector('select[aria-label="选择历史采购单"]') as HTMLSelectElement).disabled).toBe(true)
+    const supplier = container.querySelector<HTMLSelectElement>('select[aria-label="采购供应商"]')!
+    const warehouse = container.querySelector<HTMLSelectElement>('select[aria-label="收货总仓"]')!
+    act(() => { supplier.value = postedReceipt.supplier.id; supplier.dispatchEvent(new Event('change', { bubbles: true })) })
+    await waitFor(() => mockFetch.mock.calls.some(([path]) => String(path).includes('setup-options?supplierId=')))
+    await waitFor(() => container.textContent?.includes('暂无历史订单') ?? false)
+    act(() => { warehouse.value = 'warehouse-1'; warehouse.dispatchEvent(new Event('change', { bubbles: true })) })
+    await waitFor(() => (container.querySelector('button[aria-label="打开采购商品选择"]') as HTMLButtonElement)?.disabled === false)
+    act(() => (container.querySelector('button[aria-label="打开采购商品选择"]') as HTMLButtonElement).click())
+    const search = container.querySelector<HTMLInputElement>('input[aria-label="搜索采购商品"]')!
+    change(search, '见手青')
+    await waitFor(() => Boolean(container.querySelector('button[aria-label="添加采购商品 人工见手青"]')))
+    act(() => (container.querySelector('button[aria-label="添加采购商品 人工见手青"]') as HTMLButtonElement).click())
+    change(container.querySelector<HTMLInputElement>('input[aria-label="人工见手青本单单价"]')!, '12.5')
+    await act(async () => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '保存草稿')!.click())
+    const call = mockFetch.mock.calls.find(([path]) => String(path) === '/api/upstream/purchase-orders/direct')
+    expect(call).toBeTruthy()
+    expect(JSON.parse(String(call![1]?.body))).toMatchObject({ supplierId: postedReceipt.supplier.id, warehouseId: 'warehouse-1', lines: [{ upstreamSourceId: 'source-1', quantity: 1, unitPrice: 12.5 }] })
+    await waitFor(() => container.textContent?.includes('采购单明细 · UPO-NEW-001') ?? false)
+    expect(container.querySelector('[aria-label="发起采购单"]')).toBeNull()
+    expect(Array.from(container.querySelectorAll('button')).some(button => button.textContent === '查看采购单')).toBe(false)
+    expect(mockFetch.mock.calls.filter(([path]) => String(path) === '/api/upstream/purchase-orders/new-order')).toHaveLength(1)
+    act(() => root.unmount()); container.remove()
   })
 
-  it('无生效合同时可在采购单内快速建合同并带出现行价', async () => {
-    const source = {
-      id: 'source-1',
-      supplierId: postedReceipt.supplier.id,
-      purchaseUnit: 'kg',
-      quotedUnitPrice: 88,
-      minOrderQty: 1,
-      inventoryUnitsPerPurchaseUnit: 1,
-      product: {
-        id: 'product-1',
-        code: 'P001',
-        name: '人工见手青',
-        spec: 'kg',
-        inventoryUnit: 'kg',
-        unit: 'kg',
-      },
-    }
-    installPageMock({
-      sources: [source],
-      warehouses: [{ id: 'warehouse-1', code: 'WH001', name: '供应链总仓' }],
-    })
+  it('历史单商品与当前供货单位不匹配时原样加入本单', async () => {
+    const source = { id: 'source-1', supplierId: postedReceipt.supplier.id, purchaseUnit: '箱', quotedUnitPrice: 100,
+      minOrderQty: 1, inventoryUnitsPerPurchaseUnit: 1,
+      product: { id: 'product-1', code: 'P001', name: 'UAT 云南小土豆', spec: 'kg', inventoryUnit: 'kg', unit: 'kg' } }
+    const otherSource = { ...source, id: 'source-2', product: { ...source.product, id: 'product-2', code: 'P002', name: '人工见手青' } }
+    const historical = { ...changeOrder, status: 'RECEIVED', lines: [{ id: 'historical-line', productId: 'product-1', productNameSnapshot: 'UAT 云南小土豆', purchaseUnit: 'kg', inventoryUnit: 'kg', inventoryUnitsPerPurchaseUnit: 1, orderedQty: 18, unitPrice: 8.5 }] }
+    installPageMock({ orders: [historical], orderDetail: historical, sources: [source, otherSource], warehouses: [{ id: 'warehouse-1', code: 'WH001', name: '供应链总仓' }] })
+    const normal = mockFetch.getMockImplementation()!
+    mockFetch.mockImplementation((path, init) => String(path) === '/api/upstream/purchase-orders/direct' && init?.method === 'POST'
+      ? Promise.resolve({ id: 'copied-order' }) : normal(path, init))
     const { container, root } = renderPage()
-    await waitFor(() => container.textContent?.includes('新建采购单') ?? false)
-    act(() =>
-      Array.from(container.querySelectorAll('button'))
-        .find((button) => button.textContent === '新建采购单')
-        ?.click()
-    )
-    await waitFor(() => container.textContent?.includes('快速建合同') ?? false)
-    await act(async () => {
-      Array.from(container.querySelectorAll('button'))
-        .find((button) => button.textContent === '快速建合同')
-        ?.click()
-    })
-    await waitFor(() => container.textContent?.includes('供应商与现行供货价已带出') ?? false)
-
-    const price = container.querySelector('input[aria-label="人工见手青合同单价"]') as HTMLInputElement
-    expect(price.value).toBe('88')
-    expect(Array.from(container.querySelectorAll('input')).some((input) => input.value === '测试供应商长期供货框架')).toBe(true)
-
-    change(price, '41.2345678')
-    await act(async () => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '保存合同草稿')!.click())
-    expect(container.textContent).toContain('最多六位小数')
-    expect(mockFetch.mock.calls.some(([path, init]) => String(path) === '/api/upstream/contracts' && init?.method === 'POST')).toBe(false)
-    expect(price.value).toBe('41.2345678')
-    change(price, '88')
-
-    await act(async () => {
-      Array.from(container.querySelectorAll('button'))
-        .find((button) => button.textContent === '保存合同草稿')
-        ?.click()
-    })
-    await waitFor(() => mockFetch.mock.calls.some(([path, init]) => String(path) === '/api/upstream/contracts' && init?.method === 'POST'))
-    const createCall = mockFetch.mock.calls.find(([path, init]) => String(path) === '/api/upstream/contracts' && init?.method === 'POST')
-    const payload = JSON.parse(String(createCall?.[1]?.body))
-    expect(payload.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/i)
-    expect(payload.lines).toEqual([expect.objectContaining({ upstreamSourceId: 'source-1', unitPrice: 88 })])
-
-    act(() => root.unmount())
-    container.remove()
+    await waitFor(() => Boolean(container.querySelector('select[aria-label="采购供应商"]')))
+    const supplier = container.querySelector<HTMLSelectElement>('select[aria-label="采购供应商"]')!
+    act(() => { supplier.value = postedReceipt.supplier.id; supplier.dispatchEvent(new Event('change', { bubbles: true })) })
+    await waitFor(() => Boolean(container.querySelector('select[aria-label="选择历史采购单"] option[value="order-1"]')))
+    act(() => (container.querySelector('button[aria-label="打开采购商品选择"]') as HTMLButtonElement).click())
+    change(container.querySelector<HTMLInputElement>('input[aria-label="搜索采购商品"]')!, '见手青')
+    await waitFor(() => Boolean(container.querySelector('button[aria-label="添加采购商品 人工见手青"]')))
+    act(() => (container.querySelector('button[aria-label="添加采购商品 人工见手青"]') as HTMLButtonElement).click())
+    const history = container.querySelector<HTMLSelectElement>('select[aria-label="选择历史采购单"]')!
+    act(() => { history.value = 'order-1'; history.dispatchEvent(new Event('change', { bubbles: true })) })
+    await waitFor(() => (container.querySelector('input[aria-label="UAT 云南小土豆采购数量"]') as HTMLInputElement)?.value === '18')
+    expect(container.querySelectorAll('input[aria-label="UAT 云南小土豆采购数量"]')).toHaveLength(1)
+    expect(container.querySelector('input[aria-label="人工见手青采购数量"]')).toBeNull()
+    expect((container.querySelector('input[aria-label="UAT 云南小土豆本单单价"]') as HTMLInputElement).value).toBe('8.5')
+    expect(container.querySelector('[aria-label="采购商品选择"]')?.textContent).toContain('kg')
+    expect(container.querySelector('[aria-label="未能带入的历史采购明细"]')).toBeNull()
+    await act(async () => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '保存草稿')!.click())
+    const createCall = mockFetch.mock.calls.find(([path]) => String(path) === '/api/upstream/purchase-orders/direct')
+    expect(JSON.parse(String(createCall?.[1]?.body)).lines).toEqual([{ historicalLineId: 'historical-line', quantity: 18, unitPrice: 8.5 }])
+    act(() => root.unmount()); container.remove()
   })
 
-  it('快速切换供应商时旧货源响应不会覆盖新货源', async () => {
-    let resolveFirst!: (value: { sources: any[] }) => void
-    let resolveSecond!: (value: { sources: any[] }) => void
-    const first = new Promise<{ sources: any[] }>((resolve) => {
-      resolveFirst = resolve
-    })
-    const second = new Promise<{ sources: any[] }>((resolve) => {
-      resolveSecond = resolve
-    })
-    const supplierTwo = { id: 'supplier-2', no: 'SUP002', name: '第二供应商' }
-    mockFetch.mockImplementation((path, init) => {
-      const url = String(path)
-      if (url.startsWith('/api/upstream/purchase-orders?') && !init) return Promise.resolve({items:[],total:0,page:1,pageSize:20})
-      if (url === '/api/upstream/shipments') return Promise.resolve([])
-      if (url === '/api/upstream/receipts') return Promise.resolve([])
-      if (url === '/api/upstream/purchase-returns') return Promise.resolve([])
-      if (url === '/api/upstream/arrival-claims') return Promise.resolve([])
-      if (url === '/api/upstream/settlement-statements') return Promise.resolve([])
-      if (url === '/api/upstream/contracts' && !init) return Promise.resolve([])
-      if (url === '/api/upstream/quality-standards?includeArchived=1') return Promise.resolve([])
-      if (url === '/api/upstream/price-standards?includeArchived=1') return Promise.resolve([])
-      if (url === '/api/upstream/setup-options')
-        return Promise.resolve({
-          suppliers: [postedReceipt.supplier, supplierTwo],
-          warehouses: [],
-        })
-      if (url.endsWith('supplierId=supplier-1')) return first
-      if (url.endsWith('supplierId=supplier-2')) return second
-      return Promise.reject(new Error(`unexpected API: ${url}`))
-    })
-
+  it('供应商已无有效供货来源时仍按所选历史单带入商品', async () => {
+    const historical = { ...changeOrder, status: 'RECEIVED', lines: [{ id: 'historical-line-2', productId: 'product-1', productNameSnapshot: 'UAT 云南小土豆', purchaseUnit: 'kg', inventoryUnit: 'kg', inventoryUnitsPerPurchaseUnit: 1, orderedQty: 19, unitPrice: 8.5 }] }
+    const second = { ...historical, id: 'order-2', no: 'UT261109-UP-10', lines: [{ ...historical.lines[0], id: 'historical-line-3', orderedQty: 20 }] }
+    installPageMock({ orders: [historical, second], orderDetail: historical, sources: [], warehouses: [{ id: 'warehouse-1', code: 'WH001', name: '供应链总仓' }] })
+    const normal = mockFetch.getMockImplementation()!
+    mockFetch.mockImplementation((path, init) => String(path) === '/api/upstream/purchase-orders/order-2'
+      ? Promise.resolve(second) : normal(path, init))
     const { container, root } = renderPage()
-    await waitFor(() => container.textContent?.includes('新建采购单') ?? false)
-    act(() =>
-      Array.from(container.querySelectorAll('button'))
-        .find((button) => button.textContent === '新建采购单')
-        ?.click()
-    )
-    await waitFor(() => container.textContent?.includes('快速建合同') ?? false)
-    act(() =>
-      Array.from(container.querySelectorAll('button'))
-        .find((button) => button.textContent === '快速建合同')
-        ?.click()
-    )
+    await waitFor(() => Boolean(container.querySelector('select[aria-label="采购供应商"]')))
+    const supplier = container.querySelector<HTMLSelectElement>('select[aria-label="采购供应商"]')!
+    act(() => { supplier.value = postedReceipt.supplier.id; supplier.dispatchEvent(new Event('change', { bubbles: true })) })
+    await waitFor(() => Boolean(container.querySelector('select[aria-label="选择历史采购单"] option[value="order-1"]')))
+    const history = container.querySelector<HTMLSelectElement>('select[aria-label="选择历史采购单"]')!
+    act(() => { history.value = 'order-1'; history.dispatchEvent(new Event('change', { bubbles: true })) })
+    await waitFor(() => (container.querySelector('input[aria-label="UAT 云南小土豆采购数量"]') as HTMLInputElement)?.value === '19')
+    expect((container.querySelector('input[aria-label="UAT 云南小土豆本单单价"]') as HTMLInputElement).value).toBe('8.5')
+    act(() => { history.value = 'order-2'; history.dispatchEvent(new Event('change', { bubbles: true })) })
+    await waitFor(() => (container.querySelector('input[aria-label="UAT 云南小土豆采购数量"]') as HTMLInputElement)?.value === '20')
+    expect(container.querySelectorAll('input[aria-label="UAT 云南小土豆采购数量"]')).toHaveLength(1)
+    act(() => root.unmount()); container.remove()
+  })
 
-    const supplierSelect = container.querySelector('select') as HTMLSelectElement
-    act(() => {
-      Object.getOwnPropertyDescriptor(HTMLSelectElement.prototype, 'value')?.set?.call(supplierSelect, 'supplier-2')
-      supplierSelect.dispatchEvent(new Event('change', { bubbles: true }))
-    })
-    await waitFor(() => container.textContent?.includes('第二供应商') ?? false)
-    act(() =>
-      Array.from(container.querySelectorAll('button'))
-        .find((button) => button.textContent === '快速建合同')
-        ?.click()
-    )
+  it('四个历史商品移除一个后重选同一张单会恢复四个', async () => {
+    const historical = { ...changeOrder, status: 'RECEIVED', _count: { lines: 4, shipments: 0, receipts: 0 }, lines: ['小土豆', '见手青', '羊肚菌', '赤松茸'].map((name, index) => ({
+      id: `historical-line-${index}`, productId: `product-${index}`, productNameSnapshot: name,
+      purchaseUnit: 'kg', inventoryUnit: 'kg', inventoryUnitsPerPurchaseUnit: 1, orderedQty: index + 1, unitPrice: 8.5,
+    })) }
+    installPageMock({ orders: [historical], orderDetail: historical, sources: [], warehouses: [{ id: 'warehouse-1', code: 'WH001', name: '供应链总仓' }] })
+    const { container, root } = renderPage()
+    await waitFor(() => Boolean(container.querySelector('select[aria-label="采购供应商"]')))
+    const supplier = container.querySelector<HTMLSelectElement>('select[aria-label="采购供应商"]')!
+    act(() => { supplier.value = postedReceipt.supplier.id; supplier.dispatchEvent(new Event('change', { bubbles: true })) })
+    await waitFor(() => Boolean(container.querySelector('select[aria-label="选择历史采购单"] option[value="order-1"]')))
+    const history = container.querySelector<HTMLSelectElement>('select[aria-label="选择历史采购单"]')!
+    act(() => { history.value = 'order-1'; history.dispatchEvent(new Event('change', { bubbles: true })) })
+    await waitFor(() => container.querySelectorAll('input[aria-label$="采购数量"]').length === 4)
+    expect(history.value).toBe('')
+    act(() => (container.querySelector('button[aria-label="移除采购商品 见手青"]') as HTMLButtonElement).click())
+    expect(container.querySelectorAll('input[aria-label$="采购数量"]')).toHaveLength(3)
+    act(() => { history.value = 'order-1'; history.dispatchEvent(new Event('change', { bubbles: true })) })
+    await waitFor(() => container.querySelectorAll('input[aria-label$="采购数量"]').length === 4)
+    expect((container.querySelector('input[aria-label="见手青采购数量"]') as HTMLInputElement).value).toBe('2')
+    act(() => root.unmount()); container.remove()
+  })
 
-    await act(async () =>
-      resolveSecond({
-        sources: [
-          {
-            id: 'source-2',
-            supplierId: 'supplier-2',
-            purchaseUnit: 'kg',
-            quotedUnitPrice: 22,
-            minOrderQty: 1,
-            inventoryUnitsPerPurchaseUnit: 1,
-            product: {
-              id: 'product-2',
-              code: 'P002',
-              name: '新供应商商品',
-              spec: 'kg',
-              inventoryUnit: 'kg',
-              unit: 'kg',
-            },
-          },
-        ],
-      })
-    )
-    await waitFor(() => container.textContent?.includes('新供应商商品') ?? false)
-    await act(async () =>
-      resolveFirst({
-        sources: [
-          {
-            id: 'source-1',
-            supplierId: 'supplier-1',
-            purchaseUnit: 'kg',
-            quotedUnitPrice: 11,
-            minOrderQty: 1,
-            inventoryUnitsPerPurchaseUnit: 1,
-            product: {
-              id: 'product-1',
-              code: 'P001',
-              name: '旧供应商商品',
-              spec: 'kg',
-              inventoryUnit: 'kg',
-              unit: 'kg',
-            },
-          },
-        ],
-      })
-    )
-    await act(async () => {
-      await Promise.resolve()
-    })
-
-    expect(container.textContent).toContain('新供应商商品')
-    expect(container.textContent).not.toContain('旧供应商商品')
-    act(() => root.unmount())
-    container.remove()
+  it('新建采购单直接创建并发送供应商，不再提交内部审核', async () => {
+    const source = { id: 'source-2', supplierId: postedReceipt.supplier.id, purchaseUnit: 'kg', quotedUnitPrice: null,
+      minOrderQty: 2, inventoryUnitsPerPurchaseUnit: 1,
+      product: { id: 'product-2', code: 'P002', name: '鲜香菇', spec: 'kg', inventoryUnit: 'kg', unit: 'kg' } }
+    installPageMock({ sources: [source], warehouses: [{ id: 'warehouse-1', code: 'WH001', name: '供应链总仓' }] })
+    const normal = mockFetch.getMockImplementation()!
+    mockFetch.mockImplementation((path, init) => String(path) === '/api/upstream/purchase-orders/direct' && init?.method === 'POST'
+      ? Promise.resolve({ id: 'new-order-2' }) : normal(path, init))
+    window.history.replaceState({}, '', '/v2/supply-chain/procurement')
+    const { container, root } = renderPage()
+    await waitFor(() => container.textContent?.includes('发起采购单') ?? false)
+    await waitFor(() => Boolean(container.querySelector('select[aria-label="采购供应商"]')))
+    const supplier = container.querySelector<HTMLSelectElement>('select[aria-label="采购供应商"]')!
+    const warehouse = container.querySelector<HTMLSelectElement>('select[aria-label="收货总仓"]')!
+    act(() => { supplier.value = postedReceipt.supplier.id; supplier.dispatchEvent(new Event('change', { bubbles: true })) })
+    await waitFor(() => Boolean(container.querySelector('button[aria-label="添加采购商品 鲜香菇"]')) || mockFetch.mock.calls.some(([path]) => String(path).includes('setup-options?supplierId=')))
+    act(() => { warehouse.value = 'warehouse-1'; warehouse.dispatchEvent(new Event('change', { bubbles: true })) })
+    await waitFor(() => (container.querySelector('button[aria-label="打开采购商品选择"]') as HTMLButtonElement)?.disabled === false)
+    act(() => (container.querySelector('button[aria-label="打开采购商品选择"]') as HTMLButtonElement).click())
+    change(container.querySelector<HTMLInputElement>('input[aria-label="搜索采购商品"]')!, '鲜香菇')
+    await waitFor(() => Boolean(container.querySelector('button[aria-label="添加采购商品 鲜香菇"]')))
+    act(() => (container.querySelector('button[aria-label="添加采购商品 鲜香菇"]') as HTMLButtonElement).click())
+    change(container.querySelector<HTMLInputElement>('input[aria-label="鲜香菇本单单价"]')!, '10')
+    await act(async () => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '创建并发送供应商')!.click())
+    await waitFor(() => mockFetch.mock.calls.some(([path]) => String(path) === '/api/upstream/purchase-orders/direct'))
+    const createCall = mockFetch.mock.calls.find(([path]) => String(path) === '/api/upstream/purchase-orders/direct')!
+    expect(JSON.parse(String(createCall[1]?.body)).sendToSupplier).toBe(true)
+    expect(mockFetch.mock.calls.some(([path]) => String(path).includes('/submit-for-approval'))).toBe(false)
+    act(() => root.unmount()); container.remove()
   })
 
   it('对账来源同时显示采购单、收货单和差异单', async () => {
@@ -974,13 +879,9 @@ describe('上游采购收货后补报', () => {
       orderDetail: changeOrderDetail,
       receiptDetailValue: receiptDetail,
     })
+    window.history.replaceState({}, '', '/v2/supply-chain/procurement?tab=settlements')
     const { container, root } = renderPage()
     await waitFor(() => container.textContent?.includes('月度对账') ?? false)
-    act(() =>
-      Array.from(container.querySelectorAll('button'))
-        .find((button) => button.textContent === '月度对账')
-        ?.click()
-    )
     await waitFor(() => container.textContent?.includes(statement.no) ?? false)
 
     const open = Array.from(container.querySelectorAll('button')).find((button) => button.textContent === statement.no)
@@ -996,6 +897,39 @@ describe('上游采购收货后补报', () => {
     act(() => root.unmount())
     container.remove()
   })
+
+  it.each(['DISPUTED', 'DRAFT'])('对账%s状态只向处理人展示适用的异议说明', async (status) => {
+    const note = '第二笔收货金额需要核对';
+    const value = { ...statement, status, note };
+    installPageMock({ statements: [value], statementDetailValue: { ...statementDetail, status, note } });
+    window.history.replaceState({}, '', '/v2/supply-chain/procurement?tab=settlements')
+    const { container, root } = renderPage();
+    try {
+      await waitFor(() => container.textContent?.includes('月度对账') ?? false);
+      await waitFor(() => container.textContent?.includes(statement.no) ?? false);
+      expect(container.textContent?.includes(note)).toBe(status === 'DISPUTED');
+      await act(async () => Array.from(container.querySelectorAll('button')).find(button => button.textContent === statement.no)?.click());
+      await waitFor(() => container.textContent?.includes(`对账单明细 · ${statement.no}`) ?? false);
+      expect(container.textContent?.includes(note)).toBe(status === 'DISPUTED');
+    } finally { act(() => root.unmount()); container.remove(); }
+  });
+
+  it('对账组成与应付保留已入账四位金额，避免显示差一分', async () => {
+    const amounts = { receiptAmount: '100.1234', deductionAmount: '12.3456', payableAmount: '87.7778' };
+    installPageMock({ statements: [{ ...statement, ...amounts }], statementDetailValue: { ...statementDetail, ...amounts, lines: [{ ...statementDetail.lines[0], originalAmount: '100.1234', payableAmount: '100.1234' }, { ...statementDetail.lines[1], originalAmount: '12.3456', adjustmentAmount: '-12.3456', payableAmount: '-12.3456' }] } });
+    window.history.replaceState({}, '', '/v2/supply-chain/procurement?tab=settlements')
+    const { container, root } = renderPage();
+    try {
+      await waitFor(() => container.textContent?.includes('月度对账') ?? false);
+      await waitFor(() => container.textContent?.includes(statement.no) ?? false);
+      expect(container.textContent).toContain('¥100.1234');
+      expect(container.textContent).toContain('¥12.3456');
+      expect(container.textContent).toContain('¥87.7778');
+      await act(async () => Array.from(container.querySelectorAll('button')).find(button => button.textContent === statement.no)?.click());
+      await waitFor(() => container.textContent?.includes(`对账单明细 · ${statement.no}`) ?? false);
+      expect(container.textContent).toContain('-¥12.3456');
+    } finally { act(() => root.unmount()); container.remove(); }
+  });
 
   it('带收货单编号的链接可直达对应验收页并带出当前处理动作', async () => {
     const inspectingReceipt = { ...postedReceipt, status: 'INSPECTING' }
@@ -1030,6 +964,31 @@ describe('上游采购收货后补报', () => {
 
     act(() => root.unmount())
     container.remove()
+  })
+
+  it('对账第二页刷新失败时不把旧列表或未读完整当成暂无对账单', async () => {
+    installPageMock({ statements: [statement] })
+    const baseHandler = mockFetch.getMockImplementation()!
+    window.history.replaceState({}, '', '/v2/supply-chain/procurement?tab=settlements')
+    const { container, root } = renderPage()
+    try {
+      await waitFor(() => container.textContent?.includes('月度对账') ?? false)
+      await waitFor(() => container.textContent?.includes(statement.no) ?? false)
+      mockFetch.mockImplementation((path, init) => {
+        const url = String(path)
+        if (url === '/api/upstream/settlement-statements') return Promise.resolve(Array.from({ length: 200 }, (_, i) => ({ ...statement, id: `page-${i}`, no: `UST-${i}` })))
+        if (url.startsWith('/api/upstream/settlement-statements?cursor=')) return Promise.reject(new Error('对账第二页未能完整读取'))
+        return baseHandler(path, init)
+      })
+      await act(async () => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '刷新')!.click())
+      await waitFor(() => container.textContent?.includes('对账第二页未能完整读取') ?? false)
+      expect(container.textContent).not.toContain(statement.no)
+      expect(container.textContent).not.toContain('暂无对账单')
+      expect(container.textContent).not.toContain('UST-199')
+    } finally {
+      act(() => root.unmount())
+      container.remove()
+    }
   })
 
   it('在到货差异页打开来源单据时不离开当前页签', async () => {
@@ -1133,8 +1092,9 @@ describe('上游采购收货后补报', () => {
         ?.click()
     )
     await waitFor(() => container.textContent?.includes('URT202609000001') ?? false)
+    act(() => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '查看处理')?.click())
 
-    expect(container.textContent).toContain(`原收货单 ${postedReceipt.no}`)
+    expect(container.textContent).toContain(postedReceipt.no)
     expect(container.textContent).toContain('云南小土豆')
     expect(container.textContent).toContain('待审核')
     expect(Array.from(container.querySelectorAll('button')).some(button => button.textContent === '审核')).toBe(true)
@@ -1145,10 +1105,17 @@ describe('上游采购收货后补报', () => {
   })
 
   it('登记到货入口转到共用新建编辑页，不再提供旧PASS/FAIL表单', async () => {
-    const shipment = { id: 'shipment-quality-1', no: 'USH-Q-1', status: 'SHIPPED', supplierId: 'supplier-1', purchaseOrder: { id: 'order-1', no: 'UPO-Q-1', status: 'SHIPPED' }, lines: [{ id: 'line-q-1', purchaseOrderLineId: 'order-line-q-1', shippedQty: 10, purchaseUnit: 'kg', purchaseOrderLine: { productId: 'product-1', productNameSnapshot: '合成质检商品', unitPrice: 25, qualityStandardId: 'quality-1', qualityStandardVersionSnapshot: 1, qualityCriteriaSnapshot: { description: '历史标准' } } }] }
-    installPageMock({ shipments: [shipment] })
+    const shipment = { id: 'shipment-quality-1', no: 'USH-Q-1', status: 'SHIPPED', supplierId: 'supplier-1', purchaseOrder: { id: changeOrder.id, no: changeOrder.no, status: 'SHIPPED' }, lines: [{ id: 'line-q-1', purchaseOrderLineId: 'order-line-q-1', shippedQty: 10, purchaseUnit: 'kg', purchaseOrderLine: { productId: 'product-1', productNameSnapshot: '合成质检商品', unitPrice: 25, qualityStandardId: 'quality-1', qualityStandardVersionSnapshot: 1, qualityCriteriaSnapshot: { description: '历史标准' } } }] }
+    const unrelated = { ...shipment, id: 'unrelated', no: 'USH-OTHER', purchaseOrder: { ...shipment.purchaseOrder, id: 'another-order' } }
+    installPageMock({ orders: [changeOrder], orderDetail: changeOrderDetail, shipments: [shipment, unrelated] })
+    window.history.replaceState({}, '', '/v2/supply-chain/procurement?tab=orders&view=history')
     const { container, root } = renderPage()
+    await waitFor(() => Boolean(container.querySelector('button[aria-label="查看采购单 '+changeOrder.no+' 明细"]')))
+    expect(container.textContent).not.toContain(shipment.no)
+    act(() => container.querySelector<HTMLButtonElement>(`button[aria-label="查看采购单 ${changeOrder.no} 明细"]`)!.click())
     await waitFor(() => Boolean(container.querySelector('a[href*="receipts/new"]')))
+    expect(container.textContent).toContain(shipment.no)
+    expect(container.textContent).not.toContain(unrelated.no)
     const link = container.querySelector<HTMLAnchorElement>('a[href*="receipts/new"]')!
     expect(link.getAttribute('href')).toBe('/v2/supply-chain/procurement/receipts/new?shipment=shipment-quality-1')
     expect(container.textContent).not.toContain('质量验收不合格')
@@ -1169,35 +1136,18 @@ describe('上游采购收货后补报', () => {
     act(() => root.unmount()); container.remove()
   })
 
-  it('填写标准草稿后取消侧栏跳转会保留当前页面和输入', async () => {
-    installPageMock()
-    const { container, root } = renderPage()
-    await waitFor(() => container.textContent?.includes('价格与质量标准') ?? false)
-    act(() => Array.from(container.querySelectorAll('button')).find((button) => button.textContent === '价格与质量标准')?.click())
-    await waitFor(() => container.textContent?.includes('新版本·商品质量验收标准') ?? false)
-    const title = container.querySelector('input[placeholder*="黑牛肝菌"]') as HTMLInputElement
-    change(title, '临时质量标准草稿')
-
-    const event = new CustomEvent(SUPPLY_CHAIN_BEFORE_NAVIGATE_EVENT, { cancelable: true })
-    let allowed = true
-    act(() => { allowed = window.dispatchEvent(event) })
-
-    expect(allowed).toBe(false)
-    expect(container.querySelector('[role="dialog"]')?.textContent).toContain('放弃未提交的内容')
-    act(() => Array.from(container.querySelectorAll('button')).find((button) => button.textContent === '取消')?.click())
-    expect(title.value).toBe('临时质量标准草稿')
-    act(() => root.unmount())
-    container.remove()
-  })
   it('新建采购表单离开先确认，取消保留到货日期，放弃才跳转', async () => {
     installPageMock({ contracts: [contract], warehouses: [{ id: 'warehouse-1', code: 'WH001', name: '供应链总仓' }] })
     const { container, root } = renderPage()
-    await waitFor(() => container.textContent?.includes('新建采购单') ?? false)
-    act(() => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '新建采购单')!.click())
+    await waitFor(() => container.textContent?.includes('发起采购单') ?? false)
     await waitFor(() => container.textContent?.includes('期望到货日') ?? false)
     const arrival = Array.from(container.querySelectorAll<HTMLInputElement>('input[type="date"]')).find(input => input.closest('label')?.textContent?.includes('期望到货日'))!
     change(arrival, '2026-10-15')
-    const proceed = vi.fn()
+    const proceed = vi.fn(() => {
+      const unload = new Event('beforeunload', { cancelable: true })
+      window.dispatchEvent(unload)
+      expect(unload.defaultPrevented).toBe(false)
+    })
     act(() => { expect(window.dispatchEvent(new CustomEvent(SUPPLY_CHAIN_BEFORE_NAVIGATE_EVENT, { cancelable: true, detail: { proceed } }))).toBe(false) })
     await act(async () => Array.from(container.querySelectorAll('button')).find(button => button.textContent === '取消')!.click())
     expect(arrival.value).toBe('2026-10-15')
@@ -1208,52 +1158,5 @@ describe('上游采购收货后补报', () => {
     act(() => root.unmount()); container.remove()
   })
 
-  it('复制创建成功但响应丢失后，刷新恢复并仅重放原body和key，不重复创建版本',async()=>{
-    const copyLine={...contract.lines[0],productId:'product-4',upstreamSourceId:'copy-source',isActive:true}
-    const copyContract={...contract,lines:[copyLine]}
-    const copySource={id:'copy-source',supplierId:contract.supplierId,purchaseUnit:copyLine.purchaseUnit,quotedUnitPrice:150,minOrderQty:copyLine.minOrderQty,leadTimeDays:copyLine.leadTimeDays,inventoryUnitsPerPurchaseUnit:copyLine.inventoryUnitsPerPurchaseUnit,product:copyLine.product}
-    const created={...copyContract,id:'contract-created',version:2,status:'DRAFT'}
-    installPageMock({contracts:[copyContract],sources:[copySource]})
-    const normal=mockFetch.getMockImplementation()!,bodies:string[]=[],createdKeys=new Set<string>()
-    let committed=false
-    mockFetch.mockImplementation((path,init)=>{
-      if(String(path)==='/api/upstream/contracts'&&init?.method==='POST'){
-        const body=String(init.body);bodies.push(body);createdKeys.add(JSON.parse(body).idempotencyKey);committed=true
-        return bodies.length===1?Promise.reject(new Error('响应丢失')):Promise.resolve({id:created.id,contractNo:created.contractNo,title:created.title})
-      }
-      if(String(path)==='/api/upstream/contracts'&&!init)return Promise.resolve(committed?[created,copyContract]:[copyContract])
-      return normal(path,init)
-    })
-    const first=renderPage()
-    await waitFor(()=>Array.from(first.container.querySelectorAll('button')).some(button=>button.textContent==='合同与价格'))
-    act(()=>Array.from(first.container.querySelectorAll('button')).find(button=>button.textContent==='合同与价格')!.click())
-    await waitFor(()=>Array.from(first.container.querySelectorAll('button')).some(button=>button.textContent==='复制新版改价'))
-    act(()=>Array.from(first.container.querySelectorAll('button')).find(button=>button.textContent==='复制新版改价')!.click())
-    await waitFor(()=>Boolean(first.container.querySelector('input[aria-label="赤松茸A合同单价"]')))
-    change(first.container.querySelector<HTMLInputElement>('input[aria-label="赤松茸A合同单价"]')!,'160.1234567')
-    await act(async()=>Array.from(first.container.querySelectorAll('button')).find(button=>button.textContent==='保存新版合同草稿')!.click())
-    expect(first.container.textContent).toContain('最多六位小数')
-    expect(bodies).toHaveLength(0)
-    act(()=>Array.from(first.container.querySelectorAll('button')).find(button=>button.textContent==='收起')!.click())
-    act(()=>Array.from(first.container.querySelectorAll('button')).find(button=>button.textContent==='放弃修改')!.click())
-    expect(first.container.textContent).not.toContain('最多六位小数')
-    act(()=>Array.from(first.container.querySelectorAll('button')).find(button=>button.textContent==='复制新版改价')!.click())
-    await waitFor(()=>Boolean(first.container.querySelector('input[aria-label="赤松茸A合同单价"]')))
-    change(first.container.querySelector<HTMLInputElement>('input[aria-label="赤松茸A合同单价"]')!,'160.25')
-    act(()=>Array.from(first.container.querySelectorAll('button')).find(button=>button.textContent==='保存新版合同草稿')!.click())
-    await waitFor(()=>first.container.textContent?.includes('响应丢失')??false)
-    const scope='dj:contract-copy:tenant-fixture:user-fixture'
-    expect(sessionStorage.getItem(scope)).not.toBeNull()
-    act(()=>first.root.unmount());first.container.remove()
-    const second=renderPage()
-    await waitFor(()=>Array.from(second.container.querySelectorAll('button')).some(button=>button.textContent==='核对并重试原创建'))
-    expect(second.container.querySelector<HTMLInputElement>('input[aria-label="赤松茸A合同单价"]')!.disabled).toBe(true)
-    expect(second.container.querySelector<HTMLInputElement>('input[aria-label="赤松茸A合同单价"]')!.value).toBe('160.25')
-    act(()=>Array.from(second.container.querySelectorAll('button')).find(button=>button.textContent==='核对并重试原创建')!.click())
-    await waitFor(()=>bodies.length===2&&sessionStorage.getItem(scope)===null)
-    expect(bodies[1]).toBe(bodies[0]);expect(createdKeys.size).toBe(1)
-    expect(JSON.parse(bodies[1])).toMatchObject({copyFromContractId:contract.id,lines:[{upstreamSourceId:'copy-source',unitPrice:160.25}]})
-    act(()=>second.root.unmount());second.container.remove()
-  })
 
 })

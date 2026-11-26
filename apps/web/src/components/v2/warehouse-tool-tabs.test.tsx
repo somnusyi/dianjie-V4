@@ -22,18 +22,18 @@ function renderTabs() {
 }
 
 describe('库存与单据页面切换', () => {
-  it('显示四个固定标签，链接不携带关联商品参数', () => {
+  it('只显示库存查询和总仓自损，隐藏入库记录与单据审核入口', () => {
     navigation.pathname = '/v2/supply-chain/inventory'
     const { container, root } = renderTabs()
     const links = Array.from(container.querySelectorAll('a'))
 
-    expect(links.map(link => link.textContent)).toEqual(['库存查询', '总仓自损', '入库记录', '单据审核'])
+    expect(links.map(link => link.textContent)).toEqual(['库存查询', '总仓自损'])
     expect(links.map(link => link.getAttribute('href'))).toEqual([
       '/v2/supply-chain/inventory',
       '/v2/supply-chain/inventory/loss',
-      '/v2/supply-chain/inbound',
-      '/v2/supply-chain/docs',
     ])
+    expect(container.textContent).not.toContain('入库记录')
+    expect(container.textContent).not.toContain('单据审核')
     expect(links[0].getAttribute('aria-current')).toBe('page')
     expect(container.textContent).not.toContain('关联查看')
     expect(container.querySelector('[role="switch"]')).toBeNull()

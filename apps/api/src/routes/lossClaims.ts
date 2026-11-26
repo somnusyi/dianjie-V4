@@ -576,15 +576,14 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
 
   // ── 单笔详情 / 打印数据 ─────────────────────────────
   app.get('/:id', { preHandler: [(app as any).authenticate] }, async (req: any, reply: any) => {
-    const { tenantId, storeId, role, supplierId } = req.user
     const id = String(req.params?.id || '').trim()
     if (!id || id.length > 100) return reply.status(400).send({ error: '报损单 ID 无效' })
 
     const claim = await prisma.lossClaim.findFirst({
-      where: { id, ...lossClaimScope({ tenantId, storeId, role, supplierId }) },
+      where: { id, ...lossClaimScope(req.user) },
       include: {
         tenant: { select: { name: true, logo: true } },
-        store: { select: { no: true, name: true, address: true, phone: true } },
+        store: { select: { no: true, name: true, brandCode: true, address: true, phone: true } },
         supplier: { select: { no: true, name: true, contactName: true, contactPhone: true } },
         purchaseOrder: { select: { id: true, no: true, createdAt: true } },
         deliveryOrder: { select: { id: true, no: true, shippedAt: true, receivedAt: true } },
@@ -1052,7 +1051,7 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
     // 检查该订单所有报损是否全部结案
     if (claim.purchaseOrderId) void tryCompleteOrder(claim.purchaseOrderId, tenantId)
 
-    void notifyLossClaimResult(tenantId, claim.no, action, Number(claim.totalLossAmount))
+    void notifyLossClaimResult(tenantId, claim.no, action, Number(claim.totalLossAmount), claim.storeId)
     return { success: true, action }
   })
 
@@ -1097,6 +1096,7 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
       const { sendNotification } = await import('../services/notification')
       void sendNotification({
         tenantId, recipientRole: 'KITCHEN_LEAD' as any,
+        storeId: reviewed.storeId,
         type: 'LOSS_CLAIM_RESULT' as any,
         title: action === 'approve' ? '店内报损通过' : '店内报损被驳回',
         body: `${reviewed.no} ${action === 'approve' ? '已计入损耗' : '驳回, 请核对实物'}${note ? ' · ' + String(note).slice(0,40) : ''}`,
@@ -1198,6 +1198,7 @@ export const lossClaimRoutes: FastifyPluginAsync = async (app) => {
       for (const r of ['MANAGER', 'KITCHEN_LEAD', 'SUPPLIER_OWNER', 'SUPPLIER_STAFF']) {
         void sendNotification({
           tenantId, recipientRole: r as any, type: 'LOSS_CLAIM_RESULT' as any,
+          storeId: claim.storeId,
           title: '报损争议已仲裁', body, refType: 'LossClaim', refId: id,
         })
       }

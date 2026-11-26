@@ -76,10 +76,10 @@ describe('rolesForV2Path', () => {
     expect(rolesForV2Path('/v2/finance-pc/home')).toBeUndefined()
   })
 
-  it('给采购员开放总仓盘点作业、给财务开放审核，不放宽其他供应链页面', () => {
-    expect(rolesForV2Path('/v2/supply-chain/stocktake/work')).toContain('PURCHASER')
+  it('总仓盘点只开放内部供应链角色和财务只读，不放宽采购或门店角色', () => {
+    expect(rolesForV2Path('/v2/supply-chain/stocktake/work')).not.toContain('PURCHASER')
     expect(rolesForV2Path('/v2/supply-chain/stocktake/work')).toContain('FINANCE')
-    expect(rolesForV2Path('/v2/supply-chain/stocktake/count/count-1')).toContain('PURCHASER')
+    expect(rolesForV2Path('/v2/supply-chain/stocktake/count/count-1')).not.toContain('PURCHASER')
     expect(rolesForV2Path('/v2/supply-chain/stocktake/count')).not.toContain('PURCHASER')
     expect(rolesForV2Path('/v2/supply-chain/stocktake/profit')).not.toContain('PURCHASER')
     expect(rolesForV2Path('/v2/supply-chain/procurement')).not.toContain('PURCHASER')

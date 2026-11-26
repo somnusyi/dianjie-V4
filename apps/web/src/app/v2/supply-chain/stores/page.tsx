@@ -344,37 +344,6 @@ export default function InternalSupplyChainStoresPage() {
                       </div>
                     )}
 
-                    <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-                      <Metric
-                        label="今日订货"
-                        value={runboard ? `${runboard.todayOrders.count} 单` : '—'}
-                        hint={runboard
-                          ? (runboard.todayOrders.count > 0
-                              ? `品项 ${runboard.todayOrders.itemCount} · 订货金额 ${money(runboard.todayOrders.totalAmount)}`
-                              : '今日暂无订货')
-                          : runboardLoading ? '正在加载…' : '暂无数据'}
-                        tone={runboard && runboard.todayOrders.count > 0 ? 'green' : undefined}
-                      />
-                      <Metric
-                        label="进行中"
-                        value={runboard ? `${runboard.statusBreakdown.inProgress} 单` : '—'}
-                        hint="待接单 · 待发货 · 配送中 · 待门店确认"
-                        tone={runboard && runboard.statusBreakdown.inProgress > 0 ? 'orange' : undefined}
-                      />
-                      <Metric
-                        label="逾期"
-                        value={runboard ? `${runboard.overdue.count} 单` : '—'}
-                        hint="超过预计到货日仍未完成"
-                        tone={runboard ? (runboard.overdue.count > 0 ? 'red' : 'green') : undefined}
-                      />
-                      <Metric
-                        label="最近一单"
-                        value={runboard?.latestOrder ? dateTimeText(runboard.latestOrder.createdAt) : '—'}
-                        hint={runboard?.latestOrder
-                          ? `#${runboard.latestOrder.no} · ${ORDER_STATUS[runboard.latestOrder.status] || runboard.latestOrder.status}`
-                          : runboardLoading ? '正在加载…' : '暂无订货记录'}
-                      />
-                    </section>
 
                     <OrderStatusTrack breakdown={runboard?.statusBreakdown} loading={runboardLoading} />
 
@@ -453,22 +422,6 @@ export default function InternalSupplyChainStoresPage() {
           </>
         )}
       </main>
-    </div>
-  )
-}
-
-function Metric({ label, value, hint, tone }: {
-  label: string
-  value: string
-  hint: string
-  tone?: 'red' | 'orange' | 'green'
-}) {
-  const color = tone === 'red' ? 'text-red-fg' : tone === 'orange' ? 'text-orange' : tone === 'green' ? 'text-green-fg' : ''
-  return (
-    <div className="rounded-card border border-border bg-white p-4">
-      <div className="text-caption text-gray3">{label}</div>
-      <div className={`mt-1 font-num text-h1 ${color}`}>{value}</div>
-      <div className="mt-1 text-micro text-gray3">{hint}</div>
     </div>
   )
 }

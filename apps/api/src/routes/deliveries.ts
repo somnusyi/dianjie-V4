@@ -24,6 +24,8 @@ const listQuerySchema = z.object({
   keyword: z.string().trim().max(80).optional(),
   dateFrom: calendarDateSchema.optional(),
   dateTo: calendarDateSchema.optional(),
+  dateField: z.enum(['ORDERED', 'DELIVERY_CREATED', 'SHIPPED']).default('ORDERED'),
+  sort: z.enum(['DATE_DESC', 'STORE_NAME_ASC', 'STORE_NAME_DESC']).default('DATE_DESC'),
   page: z.coerce.number().int().positive().max(100_000).default(1),
   pageSize: z.coerce.number().int().positive().max(100).default(20),
 }).refine(q => !q.dateFrom || !q.dateTo || q.dateFrom <= q.dateTo, {
@@ -110,12 +112,37 @@ function buildDeliveryListWhere(q: z.infer<typeof listQuerySchema>, user: any) {
   }
   where.AND = and
   if (q.dateFrom || q.dateTo) {
-    where.createdAt = {
+    const range = {
       ...(q.dateFrom ? { gte: new Date(`${q.dateFrom}T00:00:00+08:00`) } : {}),
       ...(q.dateTo ? { lte: new Date(`${q.dateTo}T23:59:59.999+08:00`) } : {}),
     }
+    if (q.dateField === 'SHIPPED') where.shippedAt = range
+    else if (q.dateField === 'DELIVERY_CREATED') where.createdAt = range
+    else and.push({ purchaseOrder: { OR: [{ submittedAt: range }, { submittedAt: null, createdAt: range }] } })
   }
   return where
+}
+
+function projectDeliverySource(delivery: any) {
+  const replenishment = delivery.purchaseOrder?.replenishmentFulfillmentLink?.replenishmentOrder
+  return {
+    ...delivery,
+    orderedAt: delivery.purchaseOrder?.submittedAt || delivery.purchaseOrder?.createdAt || null,
+    sourceType: replenishment ? 'REPLENISHMENT' : 'NORMAL_ORDER',
+    sourceNo: replenishment?.no || null,
+  }
+}
+
+const purchaseOrderListSelect = {
+  id: true, no: true, status: true, originalTotalAmount: true, currentOrderAmount: true,
+  createdAt: true, submittedAt: true,
+  replenishmentFulfillmentLink: { select: { replenishmentOrder: { select: { id: true, no: true } } } },
+} as const
+
+function deliveryListOrderBy(sort: z.infer<typeof listQuerySchema>['sort']): any[] {
+  if (sort === 'STORE_NAME_ASC') return [{ store: { name: 'asc' } }, { createdAt: 'desc' }, { id: 'desc' }]
+  if (sort === 'STORE_NAME_DESC') return [{ store: { name: 'desc' } }, { createdAt: 'desc' }, { id: 'desc' }]
+  return [{ createdAt: 'desc' }, { id: 'desc' }]
 }
 
 const shanghaiDateTime = new Intl.DateTimeFormat('zh-CN', {
@@ -238,9 +265,9 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
     const skip = (q.page - 1) * q.pageSize
     const [items, total] = await Promise.all([
       prisma.deliveryOrder.findMany({
-        where, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], skip, take: q.pageSize,
+        where, orderBy: deliveryListOrderBy(q.sort), skip, take: q.pageSize,
         include: {
-          purchaseOrder: { select: { id: true, no: true, status: true, originalTotalAmount: true, currentOrderAmount: true } },
+          purchaseOrder: { select: purchaseOrderListSelect },
           store: { select: { id: true, name: true } },
           supplier: { select: { id: true, name: true } },
           items: { where: { removedAt: null }, include: { product: { select: { id: true, code: true, name: true, unit: true, spec: true } } } },
@@ -251,7 +278,7 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
     ])
     const profitById = await deliveryProfitById(req.user, items)
     return {
-      items: items.map(delivery => attachDeliveryProfit(delivery, profitById)),
+      items: items.map(delivery => projectDeliverySource(attachDeliveryProfit(delivery, profitById))),
       total, page: q.page, pageSize: q.pageSize,
     }
   })
@@ -265,10 +292,10 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
     }
     const rows = await prisma.deliveryOrder.findMany({
       where: buildDeliveryListWhere(parsed.data, req.user),
-      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      orderBy: deliveryListOrderBy(parsed.data.sort),
       take: DELIVERY_EXPORT_MAX_ROWS + 1,
       include: {
-        purchaseOrder: { select: { no: true } },
+        purchaseOrder: { select: purchaseOrderListSelect },
         store: { select: { name: true } },
         supplier: { select: { name: true } },
         items: { where: { removedAt: null }, include: { product: { select: { code: true, name: true, spec: true, unit: true } } } },
@@ -337,6 +364,47 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
       .header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
       .header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(filename)}`)
       .send(buffer)
+  })
+
+  app.get('/export-details.xlsx', { preHandler: [(app as any).authenticate] }, async (req: any, reply) => {
+    if (!isInternalSupplyChainRole(req.user.role)) return reply.status(403).send({ error: '只有内部供应链可导出配送明细' })
+    const parsed = z.object({ ids: z.string().trim().min(1) }).safeParse(req.query || {})
+    if (!parsed.success) return reply.status(400).send({ error: '请选择需要导出的配送单' })
+    const ids = [...new Set(parsed.data.ids.split(',').map(id => id.trim()).filter(Boolean))]
+    if (ids.length === 0 || ids.length > 100) return reply.status(400).send({ error: '单次请选择 1 至 100 张配送单' })
+    const rows = await prisma.deliveryOrder.findMany({
+      where: { id: { in: ids }, ...supplyDataReadScope(req.user), ...publicDeliveryMarkerFilter() },
+      include: {
+        purchaseOrder: { select: purchaseOrderListSelect }, store: { select: { name: true } }, supplier: { select: { name: true } },
+        items: { where: { removedAt: null }, include: { product: true } },
+      },
+    })
+    if (rows.length !== ids.length) return reply.status(404).send({ error: '所选配送单不存在或无权访问' })
+    const order = new Map(ids.map((id, index) => [id, index]))
+    rows.sort((a, b) => (order.get(a.id) ?? 0) - (order.get(b.id) ?? 0))
+    const profitById = await deliveryProfitById(req.user, rows)
+    const workbook = new ExcelJS.Workbook()
+    workbook.creator = '滇界云管'
+    const sheet = workbook.addWorksheet('所选配送单商品明细')
+    const detailColumns: Array<[string, string, number]> = [
+      ['序号','sequence',8], ['配送单号','deliveryNo',24], ['订货单号','orderNo',24], ['来源','source',22], ['门店','store',22],
+      ['订货时间','orderedAt',22], ['配送单创建时间','createdAt',22], ['发货时间','shippedAt',22], ['实际送达时间','deliveredAt',22],
+      ['商品编码','productCode',18], ['商品名称','productName',24], ['规格','productSpec',18], ['单位','unit',12],
+      ['订货数量','orderedQuantity',14], ['配送数量','shippedQuantity',14], ['单价','unitPrice',14], ['行金额','amount',14],
+      ['成本单价','costUnitPrice',14], ['行成本','costAmount',14], ['行利润','profit',14],
+    ]
+    sheet.columns = detailColumns.map(([header, key, width]) => ({ header, key, width }))
+    let sequence = 0
+    rows.forEach(raw => {
+      const row: any = projectDeliverySource(attachDeliveryProfit(raw, profitById))
+      row.items.forEach((item: any) => {
+        const p = item.profitability
+        sheet.addRow({ sequence: ++sequence, deliveryNo: row.no, orderNo: row.purchaseOrder?.no || '', source: row.sourceType === 'REPLENISHMENT' ? `补货单 ${row.sourceNo}` : '普通订货', store: row.store?.name || '', orderedAt: formatShanghaiDateTime(row.orderedAt), createdAt: formatShanghaiDateTime(row.createdAt), shippedAt: formatShanghaiDateTime(row.shippedAt), deliveredAt: formatShanghaiDateTime(row.deliveredAt), productCode: item.productCodeSnapshot || item.product?.code || '', productName: item.productNameSnapshot || item.product?.name || '', productSpec: item.productSpecSnapshot || item.product?.spec || '', unit: item.productUnitSnapshot || item.product?.unit || '', orderedQuantity: Number(item.orderedQtySnapshot || 0), shippedQuantity: Number(item.shippedQty || 0), unitPrice: Number(item.unitPriceSnapshot || 0), amount: Number(item.amount || 0), costUnitPrice: p?.costUnitPrice == null ? '—' : Number(p.costUnitPrice), costAmount: p?.costAmount == null ? '—' : Number(p.costAmount), profit: p?.profit == null ? '—' : Number(p.profit) })
+      })
+    })
+    sheet.getRow(1).font = { bold: true }; sheet.views = [{ state: 'frozen', ySplit: 1 }]
+    const buffer = Buffer.from(await workbook.xlsx.writeBuffer())
+    return reply.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet').header('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(`配送单商品明细-${businessDateKey().replaceAll('-', '')}.xlsx`)}`).send(buffer)
   })
 
   app.get('/:id/export.xlsx', { preHandler: [(app as any).authenticate] }, async (req: any, reply) => {
@@ -427,7 +495,7 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
     const delivery = await prisma.deliveryOrder.findFirst({
       where,
       include: {
-        purchaseOrder: { include: { items: { where: { isActive: true }, include: { product: true } } } },
+        purchaseOrder: { include: { replenishmentFulfillmentLink: { include: { replenishmentOrder: { select: { id: true, no: true } } } }, items: { where: { isActive: true }, include: { product: true } } } },
         store: true, supplier: true,
         createdBy: { select: { id: true, name: true, role: true } },
         shippedBy: { select: { id: true, name: true } },
@@ -441,7 +509,7 @@ export const deliveryRoutes: FastifyPluginAsync = async app => {
     if (!delivery) throw { statusCode: 404, message: '配送单不存在' }
     const profitById = await deliveryProfitById(req.user, [delivery])
     return {
-      ...attachDeliveryProfit(delivery, profitById),
+      ...projectDeliverySource(attachDeliveryProfit(delivery, profitById)),
       receipt: delivery.receipt ? {
         ...delivery.receipt,
         items: delivery.receipt.items.map(withDocumentProductSnapshot),

@@ -2,6 +2,7 @@
 import { randomUUID } from 'node:crypto'
 import { FastifyPluginAsync } from 'fastify'
 import OSS from 'ali-oss'
+import { LocalTestObjectStorage, localTestStorageEnabled } from '../lib/local-test-object-storage'
 import dayjs from 'dayjs'
 import { Prisma, prisma } from '@dianjie/db'
 import { z } from 'zod'
@@ -100,6 +101,7 @@ function withSignedFile<T extends { fileUrl: string }>(invoice: T) {
 }
 
 function ossClient() {
+  if (localTestStorageEnabled()) return new LocalTestObjectStorage()
   return new OSS({
     region: process.env.OSS_REGION || 'oss-cn-hangzhou',
     accessKeyId: process.env.OSS_ACCESS_KEY_ID!,
@@ -364,7 +366,7 @@ export const invoiceRoutes: FastifyPluginAsync = async app => {
       req.log.error({ err: error }, 'invoice OSS upload failed')
       return reply.status(502).send({ error: '发票文件上传失败，请稍后重试' })
     }
-    const fileUrl = `https://${bucket}.${region}.aliyuncs.com/${key}`
+    const fileUrl = localTestStorageEnabled() ? client.signatureUrl(key, {expires: 3600}) : `https://${bucket}.${region}.aliyuncs.com/${key}`
     const values = parsed.data
     try {
       const result = await createSupplierInvoice({

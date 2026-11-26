@@ -11,6 +11,7 @@ const KEYBOARD_RESIZE_STEP = 8
 export type OrderCenterTableColumn<Row> = Readonly<{
   id: string
   header: string
+  renderHeader?: () => ReactNode
   defaultWidth: number
   minWidth?: number
   align?: 'left' | 'right'
@@ -176,7 +177,7 @@ export function OrderCenterResizableTable<Row>({
                 className={`relative box-border whitespace-nowrap px-4 py-3 ${column.align === 'right' ? 'text-right' : ''}`}
                 style={{ width }}
               >
-                {column.header}
+                {column.renderHeader ? column.renderHeader() : column.header}
                 <span
                   aria-label={`调整${column.header}列宽`}
                   aria-orientation="vertical"

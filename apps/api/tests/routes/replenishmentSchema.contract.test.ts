@@ -11,7 +11,9 @@ describe('replenishment persistence contract', () => {
     expect(schema).toContain('model ReplenishmentFulfillmentLink {')
     expect(schema).toContain('replenishmentOrderId String   @unique')
     expect(schema).toContain('purchaseOrderId      String   @unique')
-    expect(schema).not.toMatch(/model DeliveryOrder \{[\s\S]*replenishmentOrderId/)
+    const deliveryOrderModel = schema.split('model DeliveryOrder {')[1]?.split('\n}')[0]
+    expect(deliveryOrderModel).toBeDefined()
+    expect(deliveryOrderModel).not.toContain('replenishmentOrderId')
   })
 
   it('enforces state facts, nonnegative values and unique idempotency/link constraints in SQL', () => {

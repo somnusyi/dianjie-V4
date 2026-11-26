@@ -6,6 +6,7 @@ import {
   singleOrderServerSignature,
   type SingleDeliveryNoteDraftRow,
   type SingleDeliveryNoteVersionSource,
+  type SingleDeliveryNoteDocument,
 } from './single-delivery-note-preview'
 import {
   buildOperationGroupDeliveryNoteProjection,
@@ -268,5 +269,23 @@ describe('operation-group delivery-note detail consistency', () => {
       productId: 'late-addition',
       name: '未同步新增商品',
     }], projection.items, projection.totals)).toBeNull()
+  })
+})
+
+
+describe('delivery-note category metadata without financial changes', () => {
+  it('keeps the category of unsaved single-order additions through the preview parser', () => {
+    const payload = buildSingleOrderPreviewPayload({ order: orderForPhase('CONFIRMED'), ownerUserId: 'user-1', tenantKey: 'tenant-1', rows: detailRows.map(row => ({ ...row, category: '菌菇类', location: '冷藏-003' })), now: 1000 })
+    const parsed = parseSingleOrderPreviewPayload({raw:JSON.stringify(payload),orderId:'order-1',ownerUserId:'user-1',tenantKey:'tenant-1',now:1001})!
+    expect(parsed.items.every(item => item.category === '菌菇类' && item.location === '冷藏-003')).toBe(true)
+    expect(parsed.totalAmount).toBe(45)
+    expect(applySingleOrderPreview({totalAmount:'0',items:[]} as SingleDeliveryNoteDocument,parsed).items.every(item => item.product?.category === '菌菇类' && item.product?.location === '冷藏-003')).toBe(true)
+  })
+  it('keeps category and cent rounding in a validated merged draft', () => {
+    const draftRows = [{productId:'mushroom',name:'香菇',category:'菌菇类',spec:null,unit:'kg',quantity:2.01,unitPrice:0.5},{productId:'chicken',name:'鸡架',category:'禽类',spec:null,unit:'件',quantity:3,unitPrice:10}]
+    const projection=buildOperationGroupDeliveryNoteProjection(draftRows)
+    expect(parseOperationGroupDeliveryNoteProjection({draftRows,...projection})).toEqual(projection)
+    expect(projection.items.map(item => [item.category,item.amount])).toEqual([['菌菇类',1.01],['禽类',30]])
+    expect(projection.totals.amount).toBe(31.01)
   })
 })
